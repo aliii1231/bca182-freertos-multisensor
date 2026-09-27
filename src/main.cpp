@@ -3,6 +3,11 @@
 
 UART_HandleTypeDef huart1;
 
+// Required by STM32Cube HAL so SysTick interrupts and HAL_Delay() work
+extern "C" void SysTick_Handler(void) {
+    HAL_IncTick();
+}
+
 // Initialize UART1 for Serial Output on PA9 (TX) and PA10 (RX)
 static void MX_USART1_UART_Init(void) {
     __HAL_RCC_USART1_CLK_ENABLE();
@@ -30,26 +35,21 @@ static void MX_USART1_UART_Init(void) {
     HAL_UART_Init(&huart1);
 }
 
-// Helper function to send strings over UART
 void print_msg(const char* msg) {
     HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
 }
 
-// Application entry point required by Section 10
-void app_main() 
-    {
-    HAL_Delay(1000); // Wait 1 second for terminal to open
-    
+void app_main() {
     print_msg("BCA182 FreeRTOS Multisensor\r\n");
     print_msg("System starting...\r\n");
-    
+
     while (1) {
-        print_msg("System running...\r\n");
-        HAL_Delay(2000); // Print every 2 seconds
+        HAL_Delay(1000);
     }
 }
+
 int main(void) {
-    HAL_Init(); 
+    HAL_Init();
     MX_USART1_UART_Init();
     app_main();
     return 0;
