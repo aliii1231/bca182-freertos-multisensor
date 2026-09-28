@@ -1,11 +1,13 @@
 /**
  * BCA182 - Laboratory Activity No. 1
- * PART III (done) + PART IV step 1: DHT22 sensor acquisition (Section 20)
+ * PART III (done) + PART IV: DHT22 + LDR sensor acquisition (S20-S22)
  *
  * Hardware init -> app_main() -> task creation -> scheduler (S10/S41).
  * HAL timebase on TIM4; SysTick reserved for FreeRTOS.
- * UART not yet mutex-protected: TaskA/TaskB/SensorTask prints are
- * phase-offset; the Part XI serial mutex is the proper fix.
+ * Clock: 8 MHz HSI (PSC=7 in HAL_InitTick assumes this — keep in sync
+ * with configCPU_CLOCK_HZ if ever changed).
+ * UART not yet mutex-protected: task prints are phase-offset; the
+ * Part XI serial mutex is the proper fix.
  */
 #include "stm32f1xx_hal.h"
 #include <string.h>
@@ -20,6 +22,8 @@
 #define DIAGNOSTIC_MODE  0
 
 UART_HandleTypeDef huart1;
+ADC_HandleTypeDef  hadc1;
+
 extern "C" uint32_t g_pfnVectors[];
 
 /* Instrumented port counters (src/port.c) — diagnostic only */
@@ -31,6 +35,7 @@ extern "C" uint32_t ulPortGetCriticalNesting(void);
 
 void SystemClock_Config(void);
 static void MX_USART1_UART_Init(void);
+static void MX_ADC1_Init(void);
 void app_main(void);
 
 /* ---------------------------------------------------------
@@ -88,8 +93,8 @@ static void PrintStatus(void)
 
 /* ---------------------------------------------------------
  * HAL timebase on TIM4 — SysTick belongs to FreeRTOS.
- * PSC assumes HCLK = 8 MHz (HSI). If the clock is ever changed
- * to 72 MHz, PSC must become 71 AND configCPU_CLOCK_HZ updated.
+ * PSC assumes HCLK = 8 MHz (HSI). If the clock changes to 72 MHz,
+ * PSC must become 71 AND configCPU_CLOCK_HZ updated.
  * --------------------------------------------------------- */
 extern "C" HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
 {
@@ -184,7 +189,6 @@ extern "C" void vAssertCalled(const char *file, int line)
 
 /* ---------------------------------------------------------
  * Part III tasks: priority 1, 1000 ms, vTaskDelayUntil().
- * TaskB 500 ms phase offset -> deterministic A/B alternation.
  * --------------------------------------------------------- */
 void TaskA(void *pvParameters)
 {
@@ -226,9 +230,9 @@ void TaskB(void *pvParameters)
 }
 
 /* ---------------------------------------------------------
- * SensorTask (Sections 20-22): DHT22 every 2000 ms via
+ * SensorTask (Sections 20-22): DHT22 + LDR every 2000 ms via
  * vTaskDelayUntil() — the lab's required periodic pattern.
- * Prints fixed-point without -u _printf_float.
+ * Fixed-point prints (no -u _printf_float needed).
  * --------------------------------------------------------- */
 void SensorTask(void *pvParameters)
 {
@@ -240,17 +244,27 @@ void SensorTask(void *pvParameters)
     for (;;) {
         DHT22_Result_t d = dht22_read();
 
-        if (d.valid) {
-            /* 25.4 C -> "25.40"; 61.2 % -> "61.20" */
-            int  t_int  = (int)d.temperature;
-            int  t_frac = (int)((d.temperature - (float)t_int) * 100.0f);
-            int  h_int  = (int)d.humidity;
-            int  h_frac = (int)((d.humidity - (float)h_int) * 100.0f);
+        /* LDR on PA0/ADC1: one software-triggered conversion */
+        HAL_ADC_Start(&hadc1);
+        HAL_ADC_PollForConversion(&hadc1, 10);
+        uint32_t raw = HAL_ADC_GetValue(&hadc1);      /* 0..4095 */
+        HAL_ADC_Stop(&hadc1);
 
-            char buf[48];
+        /* Documented representation (Section 21): raw 12-bit ADC
+         * count scaled linearly to 0-100 % of full scale. This is
+         * NOT calibrated lux. */
+        int light_pct = (int)((raw * 100UL + 2047UL) / 4095UL);
+
+        if (d.valid) {
+            int t_int  = (int)d.temperature;
+            int t_frac = (int)((d.temperature - (float)t_int) * 100.0f);
+            int h_int  = (int)d.humidity;
+            int h_frac = (int)((d.humidity - (float)h_int) * 100.0f);
+
+            char buf[64];
             snprintf(buf, sizeof(buf),
-                     "Temperature: %d.%02d C\r\nHumidity: %d.%02d %%\r\n",
-                     t_int, t_frac, h_int, h_frac);
+                     "Temperature: %d.%02d C\r\nHumidity: %d.%02d %%\r\nLight: %d %%\r\n",
+                     t_int, t_frac, h_int, h_frac, light_pct);
             UartPrint(buf);
         } else {
             UartPrint("DHT22 read failed\r\n");
@@ -301,6 +315,7 @@ int main(void)
     __ISB();
 
     MX_USART1_UART_Init();
+    MX_ADC1_Init();
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
     GPIO_InitTypeDef led = {0};
@@ -315,7 +330,7 @@ int main(void)
 }
 
 /* ---------------------------------------------------------
- * Clock (8 MHz HSI) and USART1
+ * Clock (8 MHz HSI) and peripherals
  * --------------------------------------------------------- */
 void SystemClock_Config(void)
 {
@@ -348,6 +363,34 @@ static void MX_USART1_UART_Init(void)
     huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
     huart1.Init.OverSampling = UART_OVERSAMPLING_16;
     HAL_UART_Init(&huart1);
+}
+
+static void MX_ADC1_Init(void)
+{
+    __HAL_RCC_ADC1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin  = GPIO_PIN_0;
+    gpio.Mode = GPIO_MODE_ANALOG;
+    HAL_GPIO_Init(GPIOA, &gpio);
+
+    hadc1.Instance               = ADC1;
+    hadc1.Init.ScanConvMode      = ADC_SCAN_DISABLE;
+    hadc1.Init.ContinuousConvMode = DISABLE;
+    hadc1.Init.DiscontinuousConvMode = DISABLE;
+    hadc1.Init.ExternalTrigConv  = ADC_SOFTWARE_START;
+    hadc1.Init.DataAlign         = ADC_DATAALIGN_RIGHT;
+    hadc1.Init.NbrOfConversion   = 1;
+    HAL_ADC_Init(&hadc1);
+
+    ADC_ChannelConfTypeDef sConfig = {0};
+    sConfig.Channel      = ADC_CHANNEL_0;      /* PA0 */
+    sConfig.Rank         = ADC_REGULAR_RANK_1;
+    sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
+    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+
+    HAL_ADCEx_Calibration_Start(&hadc1);       /* F1: calibrate before use */
 }
 
 extern "C" void HAL_UART_MspInit(UART_HandleTypeDef *huart)

@@ -4,14 +4,18 @@
   "editor": "wokwi",
   "parts": [
     { "type": "board-stm32-bluepill", "id": "stm32", "top": 0, "left": 0, "attrs": {} },
-    { "type": "wokwi-dht22", "id": "dht1", "top": -180, "left": 250, "attrs": {} }
+    { "type": "wokwi-dht22", "id": "dht1", "top": -180, "left": 250, "attrs": {} },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -180, "left": -180, "attrs": {} }
   ],
   "connections": [
     [ "stm32:A9", "$serialMonitor:RX", "green", [] ],
     [ "stm32:A10", "$serialMonitor:TX", "green", [] ],
     [ "dht1:VCC", "stm32:3V3", "red", [] ],
     [ "dht1:GND", "stm32:GND.1", "black", [] ],
-    [ "dht1:SDA", "stm32:A1", "blue", [] ]
+    [ "dht1:SDA", "stm32:A1", "blue", [] ],
+    [ "ldr1:VCC", "stm32:3V3", "red", [] ],
+    [ "ldr1:GND", "stm32:GND.1", "black", [] ],
+    [ "ldr1:AO", "stm32:A0", "orange", [] ]
   ],
   "dependencies": {}
 }
