@@ -58,6 +58,7 @@ void dht22_init(void)
     DHT22_RCC_EN();
     dwt_init();
     pin_input();            /* idle: released, pulled high */
+    HAL_Delay(1000);        /* DHT22 requires settling time after power-up */
 }
 
 /* ---------------- one full read (blocking, ~4 ms) ---------------- */

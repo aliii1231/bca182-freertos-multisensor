@@ -1,10 +1,15 @@
 /**
  * BCA182 - Laboratory Activity No. 1
- * PART V: Data Communication (S24-S25)
- *   - SensorData struct + latest-value queue (rtos_objects)
- *   - SensorTask publishes validated samples via xQueueOverwrite
- *   - LogTask consumes via xQueuePeek (temporary; DisplayTask later)
- * PART III/IV behavior preserved (tasks, DHT22, LDR).
+ * PART VI: Display Subsystem (S26-S27)
+ *   - OLED (SSD1306 I2C1) owned exclusively by DisplayTask
+ *   - DisplayTask replaces LogTask as the sensor-queue consumer
+ *   - I2C_Scan(): bus bring-up + address scan diagnostic (S26 bring-up)
+ * PART V: SensorData struct + latest-value queue (rtos_objects)
+ * PART IV: DHT22 + LDR sensor acquisition (S20-S22)
+ * PART III: FreeRTOS foundation (S17)
+ *
+ * Hardware init -> app_main() -> object creation -> task creation ->
+ * scheduler (S10/S41). HAL timebase on TIM4; SysTick = FreeRTOS.
  */
 #include "stm32f1xx_hal.h"
 #include <string.h>
@@ -14,14 +19,22 @@
 #include "task.h"
 #include "dht22.h"
 #include "rtos_objects.h"
+#include "oled.h"
+#include "alarm.h"
+#include "motion.h"
+#include "system_state.h"
 
+/* 1 = scheduler counters + status line (debugging)
+ * 0 = clean lab output                                          */
 #define DIAGNOSTIC_MODE  0
 
 UART_HandleTypeDef huart1;
 ADC_HandleTypeDef  hadc1;
+I2C_HandleTypeDef  hi2c1;
 
 extern "C" uint32_t g_pfnVectors[];
 
+/* Instrumented port counters (src/port.c) — diagnostic only */
 extern "C" volatile uint32_t g_portFirstLaunchCount;
 extern "C" volatile uint32_t g_portYieldCount;
 extern "C" volatile uint32_t g_portTickSwitchCount;
@@ -31,9 +44,40 @@ extern "C" uint32_t ulPortGetCriticalNesting(void);
 void SystemClock_Config(void);
 static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_ENCODER_Init(void);
+static void MX_BUZZER_Init(void);
+static void MX_PIR_Init(void);
+static void I2C_Scan(void);
 void app_main(void);
 
-/* --------------------------------------------------------- */
+static DisplayMode nextDisplayMode(DisplayMode current)
+{
+    return current == DISPLAY_MOTION
+        ? DISPLAY_TEMPERATURE
+        : (DisplayMode)((int)current + 1);
+}
+
+static DisplayMode previousDisplayMode(DisplayMode current)
+{
+    return current == DISPLAY_TEMPERATURE
+        ? DISPLAY_MOTION
+        : (DisplayMode)((int)current - 1);
+}
+
+static const char *displayModeName(DisplayMode mode)
+{
+    switch (mode) {
+    case DISPLAY_TEMPERATURE: return "TEMPERATURE";
+    case DISPLAY_HUMIDITY:    return "HUMIDITY";
+    case DISPLAY_LIGHT:      return "LIGHT";
+    case DISPLAY_MOTION:     return "MOTION";
+    default:                 return "UNKNOWN";
+    }
+}
+
+/* ---------------------------------------------------------
+ * UART output (USART1: PA9 = TX, PA10 = RX -> Wokwi terminal).
+ * --------------------------------------------------------- */
 static void UartPrint(const char *s)
 {
     HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), HAL_MAX_DELAY);
@@ -71,6 +115,7 @@ static void UartPrintHex(uint32_t v)
 static void PrintStatus(void)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) return;
+
     UartPrint("[STATUS] tick=");   UartPrintNum((unsigned long)xTaskGetTickCountFromISR());
     UartPrint(" sched=");          UartPrintNum((unsigned long)xTaskGetSchedulerState());
     UartPrint(" stCtrl=");         UartPrintHex(*(volatile uint32_t *)0xE000E010);
@@ -83,15 +128,20 @@ static void PrintStatus(void)
 }
 #endif
 
-/* HAL timebase on TIM4 (SysTick = FreeRTOS). PSC assumes 8 MHz HSI. */
+/* ---------------------------------------------------------
+ * HAL timebase on TIM4 — SysTick belongs to FreeRTOS.
+ * PSC assumes HCLK = 8 MHz (HSI). If the clock changes to 72 MHz,
+ * PSC must become 71 AND configCPU_CLOCK_HZ updated.
+ * --------------------------------------------------------- */
 extern "C" HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
 {
     __HAL_RCC_TIM4_CLK_ENABLE();
-    TIM4->PSC = 7;
-    TIM4->ARR = 999;
+    TIM4->PSC = 7;              /* 8 MHz / 8 = 1 MHz */
+    TIM4->ARR = 999;            /* 1 kHz -> 1 ms     */
     TIM4->CNT = 0;
     TIM4->DIER |= TIM_DIER_UIE;
     TIM4->CR1 |= TIM_CR1_CEN;
+
     HAL_NVIC_SetPriority(TIM4_IRQn, TickPriority, 0);
     HAL_NVIC_EnableIRQ(TIM4_IRQn);
     return HAL_OK;
@@ -104,12 +154,17 @@ extern "C" void TIM4_IRQHandler(void)
         HAL_IncTick();
 #if DIAGNOSTIC_MODE
         static uint32_t ms = 0;
-        if (++ms >= 2000) { ms = 0; PrintStatus(); }
+        if (++ms >= 2000) {
+            ms = 0;
+            PrintStatus();
+        }
 #endif
     }
 }
 
-/* HardFault reporter */
+/* ---------------------------------------------------------
+ * HardFault reporter
+ * --------------------------------------------------------- */
 extern "C" void HardFault_C(uint32_t *frame)
 {
     __disable_irq();
@@ -135,7 +190,9 @@ extern "C" __attribute__((naked)) void HardFault_Handler(void)
     );
 }
 
-/* FreeRTOS hooks */
+/* ---------------------------------------------------------
+ * FreeRTOS hooks
+ * --------------------------------------------------------- */
 extern "C" void vApplicationIdleHook(void)
 {
     static TickType_t lastToggle = 0;
@@ -167,13 +224,25 @@ extern "C" void vAssertCalled(const char *file, int line)
     for (;;) {}
 }
 
-/* ---------------- Part III tasks (kept until Part VI cleanup) -------- */
+/* ---------------------------------------------------------
+ * Part III tasks: priority 1, 1000 ms, vTaskDelayUntil().
+ * --------------------------------------------------------- */
 void TaskA(void *pvParameters)
 {
     (void)pvParameters;
     TickType_t lastWakeTime = xTaskGetTickCount();
+
     for (;;) {
+#if DIAGNOSTIC_MODE
+        UartPrint("Task A running, tick=");
+        UartPrintNum((unsigned long)xTaskGetTickCount());
+        UartPrint(" first=");   UartPrintNum(g_portFirstLaunchCount);
+        UartPrint(" yield=");   UartPrintNum(g_portYieldCount);
+        UartPrint(" tickSw=");  UartPrintNum(g_portTickSwitchCount);
+        UartPrint("\r\n");
+#else
         UartPrint("Task A running\r\n");
+#endif
         vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
@@ -181,15 +250,27 @@ void TaskA(void *pvParameters)
 void TaskB(void *pvParameters)
 {
     (void)pvParameters;
+
     vTaskDelay(pdMS_TO_TICKS(500));
     TickType_t lastWakeTime = xTaskGetTickCount();
+
     for (;;) {
+#if DIAGNOSTIC_MODE
+        UartPrint("Task B running, tick=");
+        UartPrintNum((unsigned long)xTaskGetTickCount());
+        UartPrint("\r\n");
+#else
         UartPrint("Task B running\r\n");
+#endif
         vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
 
-/* ---------------- SensorTask (S20-S22 + S25 publish) ------------------ */
+/* ---------------------------------------------------------
+ * SensorTask (S20-S22 + S25 publish): DHT22 + LDR every 2500 ms
+ * via vTaskDelayUntil(); validated samples published to the
+ * latest-value queue via xQueueOverwrite().
+ * --------------------------------------------------------- */
 void SensorTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -198,13 +279,19 @@ void SensorTask(void *pvParameters)
     TickType_t lastWakeTime = xTaskGetTickCount();
 
     for (;;) {
-        DHT22_Result_t d = dht22_read();
+        DHT22_Result_t d;
+        taskENTER_CRITICAL();
+        d = dht22_read();
+        taskEXIT_CRITICAL();
 
+        /* LDR on PA0/ADC1: one software-triggered conversion */
         HAL_ADC_Start(&hadc1);
         HAL_ADC_PollForConversion(&hadc1, 10);
-        uint32_t raw = HAL_ADC_GetValue(&hadc1);
+        uint32_t raw = HAL_ADC_GetValue(&hadc1);      /* 0..4095 */
         HAL_ADC_Stop(&hadc1);
 
+        /* Documented representation (S21): raw 12-bit ADC count
+         * scaled linearly to 0-100 % of full scale. NOT calibrated lux. */
         int light_pct = (int)((raw * 100UL + 2047UL) / 4095UL);
 
         if (d.valid) {
@@ -217,57 +304,171 @@ void SensorTask(void *pvParameters)
 
             xQueueOverwrite(xSensorQueue, &sd);
 
-            int t_int  = (int)d.temperature;
+            int t_int = (int)d.temperature;
             int t_frac = (int)((d.temperature - (float)t_int) * 100.0f);
-            int h_int  = (int)d.humidity;
+            int h_int = (int)d.humidity;
             int h_frac = (int)((d.humidity - (float)h_int) * 100.0f);
-
-            char buf[64];
+            char buf[96];
             snprintf(buf, sizeof(buf),
-                     "Temperature: %d.%02d C\r\nHumidity: %d.%02d %%\r\nLight: %d %%\r\n",
-                     t_int, t_frac, h_int, h_frac, light_pct);
+                     "Sample: Temperature: %d.%02d C, Humidity: %d.%02d %%, Light: %d %%, Motion: %s\r\n",
+                     t_int, t_frac, h_int, h_frac, light_pct,
+                     sd.motionDetected ? "yes" : "no");
             UartPrint(buf);
         } else {
             UartPrint("DHT22 read failed\r\n");
         }
 
-        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(2000));
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(2500));
     }
 }
 
-/* ---------------- LogTask (S25 demo consumer; temporary) --------------
- * Will be REPLACED by DisplayTask (Part VI) and AlarmTask (Part VIII).
- * Peeks the latest-value mailbox on its own 2 s schedule. Uses a
- * fixed-point print (no float formatting dependency).                  */
-void LogTask(void *pvParameters)
+/* ---------------------------------------------------------
+ * InputTask (S28-S29): poll the rotary encoder and publish
+ * navigation commands. PB10/PB11 use internal pull-ups.
+ * --------------------------------------------------------- */
+void InputTask(void *pvParameters)
 {
     (void)pvParameters;
-    TickType_t lastWakeTime = xTaskGetTickCount();
+    uint8_t previousState = 0;
+    int8_t transitionSum = 0;
+
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_SET) previousState |= 2;
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) == GPIO_PIN_SET) previousState |= 1;
+    UartPrint("[INPUT] ready\r\n");
 
     for (;;) {
-        SensorData sd;
-        if (xQueuePeek(xSensorQueue, &sd, 0) == pdTRUE) {
-            int t_int  = (int)sd.temperature;
-            int t_frac = (int)((sd.temperature - (float)t_int) * 100.0f);
-            int h_int  = (int)sd.humidity;
-            int h_frac = (int)((sd.humidity - (float)h_int) * 100.0f);
+        uint8_t currentState = 0;
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_SET) currentState |= 2;
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) == GPIO_PIN_SET) currentState |= 1;
 
-            char buf[64];
-            snprintf(buf, sizeof(buf),
-                     "[QUEUE] T=%d.%02d H=%d.%02d L=%d%% M=%d\r\n",
-                     t_int, t_frac, h_int, h_frac, sd.lightLevel,
-                     sd.motionDetected ? 1 : 0);
-            UartPrint(buf);
+        uint8_t transition = (uint8_t)((previousState << 2) | currentState);
+        int8_t delta = 0;
+        switch (transition) {
+        case 0x01: case 0x07: case 0x0E: case 0x08: delta = 1; break;
+        case 0x02: case 0x0B: case 0x0D: case 0x04: delta = -1; break;
+        default: break;
         }
-        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(2000));
+
+        transitionSum += delta;
+        previousState = currentState;
+
+        if (transitionSum >= 4 || transitionSum <= -4) {
+            NavCommand command = transitionSum >= 4 ? NAV_NEXT : NAV_PREV;
+            xQueueSend(xNavQueue, &command, 0);
+            transitionSum = 0;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 
-/* ---------------- Application entry point (S10) ----------------------- */
+/* ---------------------------------------------------------
+ * DisplayTask (S26-S27): SOLE owner of the OLED. Consumes the
+ * sensor queue (peek = latest snapshot) and renders the current
+ * page. No other task touches I2C1 or the framebuffer.
+ * --------------------------------------------------------- */
+void DisplayTask(void *pvParameters)
+{
+    (void)pvParameters;
+    oled_init();
+    UartPrint("[DISPLAY] ready\r\n");
+
+    TickType_t lastWake = xTaskGetTickCount();
+    char line[24];
+    DisplayMode mode = DISPLAY_TEMPERATURE;
+
+    for (;;) {
+        NavCommand command;
+        while (xQueueReceive(xNavQueue, &command, 0) == pdTRUE) {
+            if (command == NAV_NEXT) mode = nextDisplayMode(mode);
+            if (command == NAV_PREV) mode = previousDisplayMode(mode);
+            UartPrint("[INPUT] mode: ");
+            UartPrint(displayModeName(mode));
+            UartPrint("\r\n");
+        }
+
+        SensorData sd;
+        if (xQueuePeek(xSensorQueue, &sd, 0) == pdTRUE) {
+            oled_clear();
+            oled_show_text(10, 0, "ROOM MONITOR");
+
+            if (mode == DISPLAY_TEMPERATURE) {
+                int t_int = (int)sd.temperature;
+                int t_frac = (int)((sd.temperature - (float)t_int) * 10.0f);
+                oled_show_text(10, 2, "Temperature");
+                snprintf(line, sizeof(line), "%d.%u C", t_int, (unsigned)t_frac);
+            } else if (mode == DISPLAY_HUMIDITY) {
+                int h_int = (int)sd.humidity;
+                int h_frac = (int)((sd.humidity - (float)h_int) * 10.0f);
+                oled_show_text(10, 2, "Humidity");
+                snprintf(line, sizeof(line), "%d.%u %%", h_int, (unsigned)h_frac);
+            } else if (mode == DISPLAY_LIGHT) {
+                oled_show_text(10, 2, "Light");
+                snprintf(line, sizeof(line), "%d %%", sd.lightLevel);
+            } else {
+                oled_show_text(10, 2, "Motion");
+                snprintf(line, sizeof(line), "%s", sd.motionDetected ? "YES" : "NO");
+            }
+            oled_show_text(10, 4, line);
+        } else {
+            oled_clear();
+            oled_show_text(10, 2, "NO DATA");
+        }
+
+        vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(500));
+    }
+}
+
+/* ---------------------------------------------------------
+ * I2C1 bring-up + bus scan (S26 diagnostic).
+ * Reports every device that ACKs on the bus. Expected for the
+ * SSD1306: 0x3C (or 0x3D if its SA0 pin is strapped high).
+ * Note: this RE-initializes I2C1 with the same config that
+ * oled_init() uses, so it is safe to run before the scheduler.
+ * --------------------------------------------------------- */
+static void I2C_Scan(void)
+{
+    __HAL_RCC_AFIO_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_I2C1_CLK_ENABLE();
+
+    GPIO_InitTypeDef g = {0};
+    g.Pin   = GPIO_PIN_6 | GPIO_PIN_7;    /* B6=SCL, B7=SDA */
+    g.Mode  = GPIO_MODE_AF_OD;
+    g.Pull  = GPIO_PULLUP;
+    g.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOB, &g);
+
+    hi2c1.Instance             = I2C1;
+    hi2c1.Init.ClockSpeed      = 100000;
+    hi2c1.Init.DutyCycle       = I2C_DUTYCYCLE_2;
+    hi2c1.Init.OwnAddress1     = 0;
+    hi2c1.Init.AddressingMode  = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode   = I2C_NOSTRETCH_DISABLE;
+    HAL_I2C_Init(&hi2c1);
+
+    UartPrint("I2C scan:");
+    bool found = false;
+    for (uint8_t a = 0x03; a <= 0x77; a++) {
+        if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 2, 10) == HAL_OK) {
+            char b[16];
+            snprintf(b, sizeof(b), " 0x%02X", a);
+            UartPrint(b);
+            found = true;
+        }
+    }
+    UartPrint(found ? "\r\n" : " none\r\n");
+}
+
+/* ---------------------------------------------------------
+ * Application entry point (Section 10)
+ * --------------------------------------------------------- */
 void app_main(void)
 {
     UartPrint("BCA182 FreeRTOS Multisensor\r\n");
     UartPrint("System starting...\r\n");
+    I2C_Scan();          /* S26 diagnostic: proves the OLED is on the bus */
 
     /* S41 flow: object creation BEFORE task creation */
     if (createRtosObjects() != pdPASS) {
@@ -275,19 +476,39 @@ void app_main(void)
         while (1) {}
     }
 
-    BaseType_t a = xTaskCreate(TaskA, "TaskA", 256, NULL, 1, NULL);
-    BaseType_t b = xTaskCreate(TaskB, "TaskB", 256, NULL, 1, NULL);
     BaseType_t s = xTaskCreate(SensorTask, "Sensor", 512, NULL, 2, NULL);
-    BaseType_t g = xTaskCreate(LogTask, "Log", 256, NULL, 1, NULL);
+    BaseType_t d = xTaskCreate(DisplayTask, "Display", 512, NULL, 1, NULL);
+    BaseType_t i = xTaskCreate(InputTask, "Input", 256, NULL, 3, NULL);
+    BaseType_t a = xTaskCreate(AlarmTask, "Alarm", 256, NULL, 2, NULL);
+    BaseType_t m = xTaskCreate(MotionTask, "Motion", 256, NULL, 3, NULL);
+    BaseType_t st = xTaskCreate(StateTask, "State", 256, NULL, 2, NULL);
+
+    if (i != pdPASS) {
+        UartPrint("ERROR: InputTask creation failed\r\n");
+    }
+    if (s != pdPASS) {
+        UartPrint("ERROR: SensorTask creation failed\r\n");
+    }
+    if (d != pdPASS) {
+        UartPrint("ERROR: DisplayTask creation failed\r\n");
+    }
+    if (a != pdPASS) {
+        UartPrint("ERROR: AlarmTask creation failed\r\n");
+    }
+    if (m != pdPASS) {
+        UartPrint("ERROR: MotionTask creation failed\r\n");
+    }
+    if (st != pdPASS) {
+        UartPrint("ERROR: StateTask creation failed\r\n");
+    }
 
 #if DIAGNOSTIC_MODE
-    if (a != pdPASS) UartPrint("ERROR: TaskA creation failed\r\n");
-    if (b != pdPASS) UartPrint("ERROR: TaskB creation failed\r\n");
     if (s != pdPASS) UartPrint("ERROR: SensorTask creation failed\r\n");
-    if (g != pdPASS) UartPrint("ERROR: LogTask creation failed\r\n");
+    if (d != pdPASS) UartPrint("ERROR: DisplayTask creation failed\r\n");
+    if (i != pdPASS) UartPrint("ERROR: InputTask creation failed\r\n");
     UartPrint("Starting scheduler...\r\n");
 #else
-    (void)a; (void)b; (void)s; (void)g;
+    (void)s; (void)d; (void)i; (void)a; (void)m; (void)st;
 #endif
 
     vTaskStartScheduler();
@@ -296,7 +517,9 @@ void app_main(void)
     while (1) {}
 }
 
-/* ---------------- main: hardware init only (S41) ---------------------- */
+/* ---------------------------------------------------------
+ * main: hardware initialization only (Section 41)
+ * --------------------------------------------------------- */
 int main(void)
 {
     HAL_Init();
@@ -309,6 +532,9 @@ int main(void)
 
     MX_USART1_UART_Init();
     MX_ADC1_Init();
+    MX_ENCODER_Init();
+    MX_BUZZER_Init();
+    MX_PIR_Init();
 
     __HAL_RCC_GPIOC_CLK_ENABLE();
     GPIO_InitTypeDef led = {0};
@@ -318,10 +544,13 @@ int main(void)
     HAL_GPIO_Init(GPIOC, &led);
 
     app_main();
+
     return 0;
 }
 
-/* ---------------- Clock + peripherals (unchanged) --------------------- */
+/* ---------------------------------------------------------
+ * Clock (8 MHz HSI) and peripherals
+ * --------------------------------------------------------- */
 void SystemClock_Config(void)
 {
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -375,12 +604,46 @@ static void MX_ADC1_Init(void)
     HAL_ADC_Init(&hadc1);
 
     ADC_ChannelConfTypeDef sConfig = {0};
-    sConfig.Channel      = ADC_CHANNEL_0;
+    sConfig.Channel      = ADC_CHANNEL_0;      /* PA0 */
     sConfig.Rank         = ADC_REGULAR_RANK_1;
     sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
     HAL_ADC_ConfigChannel(&hadc1, &sConfig);
 
-    HAL_ADCEx_Calibration_Start(&hadc1);
+    HAL_ADCEx_Calibration_Start(&hadc1);       /* F1: calibrate before use */
+}
+
+static void MX_ENCODER_Init(void)
+{
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin = GPIO_PIN_10 | GPIO_PIN_11;
+    gpio.Mode = GPIO_MODE_INPUT;
+    gpio.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOB, &gpio);
+}
+
+static void MX_BUZZER_Init(void)
+{
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin = GPIO_PIN_12;
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &gpio);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+}
+
+static void MX_PIR_Init(void)
+{
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin = GPIO_PIN_13;
+    gpio.Mode = GPIO_MODE_INPUT;
+    gpio.Pull = GPIO_PULLDOWN;
+    HAL_GPIO_Init(GPIOB, &gpio);
 }
 
 extern "C" void HAL_UART_MspInit(UART_HandleTypeDef *huart)
@@ -399,5 +662,21 @@ extern "C" void HAL_UART_MspInit(UART_HandleTypeDef *huart)
         GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
         GPIO_InitStruct.Pull = GPIO_NOPULL;
         HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    }
+}
+
+extern "C" void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
+{
+    if (hi2c->Instance == I2C1) {
+        __HAL_RCC_AFIO_CLK_ENABLE();
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+        __HAL_RCC_I2C1_CLK_ENABLE();
+
+        GPIO_InitTypeDef gpio = {0};
+        gpio.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+        gpio.Mode = GPIO_MODE_AF_OD;
+        gpio.Pull = GPIO_PULLUP;
+        gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+        HAL_GPIO_Init(GPIOB, &gpio);
     }
 }

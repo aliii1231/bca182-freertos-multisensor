@@ -27,12 +27,11 @@
 
 #define configTICK_RATE_HZ                      ((TickType_t)1000)
 
-#define configMAX_PRIORITIES                    5
+#define configMAX_PRIORITIES                    5   /* InputTask uses priority 3 -> need >= 4; lab table needs 5 */
 
 #define configMINIMAL_STACK_SIZE                ((unsigned short)128)
 
-#define configTOTAL_HEAP_SIZE                   ((size_t)(8 * 1024))
-
+#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 12 * 1024 ) )   /* 5 tasks: ~8.5 KB stack+TCB; was 10 KB, give margin */
 #define configMAX_TASK_NAME_LEN                 16
 
 #define configUSE_16_BIT_TICKS                  0

@@ -1,21 +1,48 @@
 {
   "version": 1,
-  "author": "Ali Tabrani D. Ismael",
+  "author": "MSU-IIT BCA182",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-stm32-bluepill", "id": "stm32", "top": 0, "left": 0, "attrs": {} },
-    { "type": "wokwi-dht22", "id": "dht1", "top": -180, "left": 250, "attrs": {} },
-    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": -180, "left": -180, "attrs": {} }
+    { "type": "board-stm32-bluepill", "id": "stm32", "top": 120, "left": 280, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled1", "top": 100, "left": 40, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-ky-040", "id": "encoder1", "top": 40, "left": 470, "attrs": {} },
+    { "type": "wokwi-buzzer", "id": "buzzer1", "top": 230, "left": 700, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": 250, "left": 480, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht1", "top": 310, "left": 480, "attrs": { "temperature": "24.5", "humidity": "60" } },
+    { "type": "wokwi-resistor", "id": "dhtPullup", "top": 360, "left": 390, "attrs": { "value": "10k" } },
+    { "type": "wokwi-photoresistor-sensor", "id": "ldr1", "top": 440, "left": 480, "attrs": {} }
   ],
   "connections": [
     [ "stm32:A9", "$serialMonitor:RX", "green", [] ],
     [ "stm32:A10", "$serialMonitor:TX", "green", [] ],
-    [ "dht1:VCC", "stm32:3V3", "red", [] ],
-    [ "dht1:GND", "stm32:GND.1", "black", [] ],
-    [ "dht1:SDA", "stm32:A1", "blue", [] ],
-    [ "ldr1:VCC", "stm32:3V3", "red", [] ],
-    [ "ldr1:GND", "stm32:GND.1", "black", [] ],
-    [ "ldr1:AO", "stm32:A0", "orange", [] ]
+
+    [ "oled1:VCC", "stm32:3V3.1", "red", ["v-20", "h190", "*", "h-20"] ],
+    [ "oled1:GND", "stm32:GND.1", "black", ["v-15", "h175", "*", "h-20"] ],
+    [ "oled1:SCL", "stm32:B6", "yellow", ["v-10", "h160", "*", "h-20"] ],
+    [ "oled1:SDA", "stm32:B7", "green", ["v-5", "h145", "*", "h-20"] ],
+
+    [ "encoder1:CLK", "stm32:B10", "blue", ["h-40", "v100", "h-120"] ],
+    [ "encoder1:DT", "stm32:B11", "blue", ["h-30", "v120", "h-130"] ],
+    [ "encoder1:VCC", "stm32:3V3.1", "red", ["h-20", "v80", "h-100"] ],
+    [ "encoder1:GND", "stm32:GND.1", "black", ["h-20", "v140", "h-100"] ],
+
+    [ "buzzer1:1", "stm32:B12", "purple", ["h-80", "v-80", "h-100"] ],
+    [ "buzzer1:2", "stm32:GND.1", "black", ["h-100", "v-100", "h-100"] ],
+
+    [ "pir1:VCC", "stm32:3V3.2", "red", ["h-40", "v-60", "h-100"] ],
+    [ "pir1:GND", "stm32:GND.2", "black", ["h-50", "v80", "h-100"] ],
+    [ "pir1:OUT", "stm32:B13", "orange", ["h-40", "v20", "h-100"] ],
+
+    [ "dht1:VCC", "stm32:3V3.2", "red", ["h-40", "*", "h20"] ],
+    [ "dht1:GND", "stm32:GND.2", "black", ["h-50", "*", "h20"] ],
+    [ "dht1:SDA", "stm32:A1", "green", ["h-40", "*", "h20"] ],
+    [ "dhtPullup:1", "stm32:3V3.2", "red", ["v-20", "h-80"] ],
+    [ "dhtPullup:2", "dht1:SDA", "green", ["v20", "h80"] ],
+
+    [ "ldr1:VCC", "stm32:3V3.2", "red", ["h-40", "*", "h20"] ],
+    [ "ldr1:GND", "stm32:GND.2", "black", ["h-50", "*", "h20"] ],
+    [ "ldr1:AO", "stm32:A0", "orange", ["h-40", "*", "h20"] ]
   ],
+  "serialMonitor": { "display": "always" },
   "dependencies": {}
 }
