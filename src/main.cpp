@@ -1,13 +1,10 @@
 /**
  * BCA182 - Laboratory Activity No. 1
- * PART III (done) + PART IV: DHT22 + LDR sensor acquisition (S20-S22)
- *
- * Hardware init -> app_main() -> task creation -> scheduler (S10/S41).
- * HAL timebase on TIM4; SysTick reserved for FreeRTOS.
- * Clock: 8 MHz HSI (PSC=7 in HAL_InitTick assumes this — keep in sync
- * with configCPU_CLOCK_HZ if ever changed).
- * UART not yet mutex-protected: task prints are phase-offset; the
- * Part XI serial mutex is the proper fix.
+ * PART V: Data Communication (S24-S25)
+ *   - SensorData struct + latest-value queue (rtos_objects)
+ *   - SensorTask publishes validated samples via xQueueOverwrite
+ *   - LogTask consumes via xQueuePeek (temporary; DisplayTask later)
+ * PART III/IV behavior preserved (tasks, DHT22, LDR).
  */
 #include "stm32f1xx_hal.h"
 #include <string.h>
@@ -16,9 +13,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "dht22.h"
+#include "rtos_objects.h"
 
-/* 1 = scheduler counters + status line (debugging)
- * 0 = clean lab output                                          */
 #define DIAGNOSTIC_MODE  0
 
 UART_HandleTypeDef huart1;
@@ -26,7 +22,6 @@ ADC_HandleTypeDef  hadc1;
 
 extern "C" uint32_t g_pfnVectors[];
 
-/* Instrumented port counters (src/port.c) — diagnostic only */
 extern "C" volatile uint32_t g_portFirstLaunchCount;
 extern "C" volatile uint32_t g_portYieldCount;
 extern "C" volatile uint32_t g_portTickSwitchCount;
@@ -38,9 +33,7 @@ static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
 void app_main(void);
 
-/* ---------------------------------------------------------
- * UART output (USART1: PA9 = TX, PA10 = RX -> Wokwi terminal).
- * --------------------------------------------------------- */
+/* --------------------------------------------------------- */
 static void UartPrint(const char *s)
 {
     HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), HAL_MAX_DELAY);
@@ -78,7 +71,6 @@ static void UartPrintHex(uint32_t v)
 static void PrintStatus(void)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) return;
-
     UartPrint("[STATUS] tick=");   UartPrintNum((unsigned long)xTaskGetTickCountFromISR());
     UartPrint(" sched=");          UartPrintNum((unsigned long)xTaskGetSchedulerState());
     UartPrint(" stCtrl=");         UartPrintHex(*(volatile uint32_t *)0xE000E010);
@@ -91,20 +83,15 @@ static void PrintStatus(void)
 }
 #endif
 
-/* ---------------------------------------------------------
- * HAL timebase on TIM4 — SysTick belongs to FreeRTOS.
- * PSC assumes HCLK = 8 MHz (HSI). If the clock changes to 72 MHz,
- * PSC must become 71 AND configCPU_CLOCK_HZ updated.
- * --------------------------------------------------------- */
+/* HAL timebase on TIM4 (SysTick = FreeRTOS). PSC assumes 8 MHz HSI. */
 extern "C" HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
 {
     __HAL_RCC_TIM4_CLK_ENABLE();
-    TIM4->PSC = 7;              /* 8 MHz / 8 = 1 MHz */
-    TIM4->ARR = 999;            /* 1 kHz -> 1 ms     */
+    TIM4->PSC = 7;
+    TIM4->ARR = 999;
     TIM4->CNT = 0;
     TIM4->DIER |= TIM_DIER_UIE;
     TIM4->CR1 |= TIM_CR1_CEN;
-
     HAL_NVIC_SetPriority(TIM4_IRQn, TickPriority, 0);
     HAL_NVIC_EnableIRQ(TIM4_IRQn);
     return HAL_OK;
@@ -117,17 +104,12 @@ extern "C" void TIM4_IRQHandler(void)
         HAL_IncTick();
 #if DIAGNOSTIC_MODE
         static uint32_t ms = 0;
-        if (++ms >= 2000) {
-            ms = 0;
-            PrintStatus();
-        }
+        if (++ms >= 2000) { ms = 0; PrintStatus(); }
 #endif
     }
 }
 
-/* ---------------------------------------------------------
- * HardFault reporter
- * --------------------------------------------------------- */
+/* HardFault reporter */
 extern "C" void HardFault_C(uint32_t *frame)
 {
     __disable_irq();
@@ -153,9 +135,7 @@ extern "C" __attribute__((naked)) void HardFault_Handler(void)
     );
 }
 
-/* ---------------------------------------------------------
- * FreeRTOS hooks
- * --------------------------------------------------------- */
+/* FreeRTOS hooks */
 extern "C" void vApplicationIdleHook(void)
 {
     static TickType_t lastToggle = 0;
@@ -187,25 +167,13 @@ extern "C" void vAssertCalled(const char *file, int line)
     for (;;) {}
 }
 
-/* ---------------------------------------------------------
- * Part III tasks: priority 1, 1000 ms, vTaskDelayUntil().
- * --------------------------------------------------------- */
+/* ---------------- Part III tasks (kept until Part VI cleanup) -------- */
 void TaskA(void *pvParameters)
 {
     (void)pvParameters;
     TickType_t lastWakeTime = xTaskGetTickCount();
-
     for (;;) {
-#if DIAGNOSTIC_MODE
-        UartPrint("Task A running, tick=");
-        UartPrintNum((unsigned long)xTaskGetTickCount());
-        UartPrint(" first=");   UartPrintNum(g_portFirstLaunchCount);
-        UartPrint(" yield=");   UartPrintNum(g_portYieldCount);
-        UartPrint(" tickSw=");  UartPrintNum(g_portTickSwitchCount);
-        UartPrint("\r\n");
-#else
         UartPrint("Task A running\r\n");
-#endif
         vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
@@ -213,27 +181,15 @@ void TaskA(void *pvParameters)
 void TaskB(void *pvParameters)
 {
     (void)pvParameters;
-
     vTaskDelay(pdMS_TO_TICKS(500));
     TickType_t lastWakeTime = xTaskGetTickCount();
-
     for (;;) {
-#if DIAGNOSTIC_MODE
-        UartPrint("Task B running, tick=");
-        UartPrintNum((unsigned long)xTaskGetTickCount());
-        UartPrint("\r\n");
-#else
         UartPrint("Task B running\r\n");
-#endif
         vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
 
-/* ---------------------------------------------------------
- * SensorTask (Sections 20-22): DHT22 + LDR every 2000 ms via
- * vTaskDelayUntil() — the lab's required periodic pattern.
- * Fixed-point prints (no -u _printf_float needed).
- * --------------------------------------------------------- */
+/* ---------------- SensorTask (S20-S22 + S25 publish) ------------------ */
 void SensorTask(void *pvParameters)
 {
     (void)pvParameters;
@@ -244,18 +200,23 @@ void SensorTask(void *pvParameters)
     for (;;) {
         DHT22_Result_t d = dht22_read();
 
-        /* LDR on PA0/ADC1: one software-triggered conversion */
         HAL_ADC_Start(&hadc1);
         HAL_ADC_PollForConversion(&hadc1, 10);
-        uint32_t raw = HAL_ADC_GetValue(&hadc1);      /* 0..4095 */
+        uint32_t raw = HAL_ADC_GetValue(&hadc1);
         HAL_ADC_Stop(&hadc1);
 
-        /* Documented representation (Section 21): raw 12-bit ADC
-         * count scaled linearly to 0-100 % of full scale. This is
-         * NOT calibrated lux. */
         int light_pct = (int)((raw * 100UL + 2047UL) / 4095UL);
 
         if (d.valid) {
+            /* S25: publish ONLY validated complete samples. */
+            SensorData sd;
+            sd.temperature    = d.temperature;
+            sd.humidity       = d.humidity;
+            sd.lightLevel     = light_pct;
+            sd.motionDetected = false;          /* Part IX: MotionTask */
+
+            xQueueOverwrite(xSensorQueue, &sd);
+
             int t_int  = (int)d.temperature;
             int t_frac = (int)((d.temperature - (float)t_int) * 100.0f);
             int h_int  = (int)d.humidity;
@@ -274,25 +235,59 @@ void SensorTask(void *pvParameters)
     }
 }
 
-/* ---------------------------------------------------------
- * Application entry point (Section 10)
- * --------------------------------------------------------- */
+/* ---------------- LogTask (S25 demo consumer; temporary) --------------
+ * Will be REPLACED by DisplayTask (Part VI) and AlarmTask (Part VIII).
+ * Peeks the latest-value mailbox on its own 2 s schedule. Uses a
+ * fixed-point print (no float formatting dependency).                  */
+void LogTask(void *pvParameters)
+{
+    (void)pvParameters;
+    TickType_t lastWakeTime = xTaskGetTickCount();
+
+    for (;;) {
+        SensorData sd;
+        if (xQueuePeek(xSensorQueue, &sd, 0) == pdTRUE) {
+            int t_int  = (int)sd.temperature;
+            int t_frac = (int)((sd.temperature - (float)t_int) * 100.0f);
+            int h_int  = (int)sd.humidity;
+            int h_frac = (int)((sd.humidity - (float)h_int) * 100.0f);
+
+            char buf[64];
+            snprintf(buf, sizeof(buf),
+                     "[QUEUE] T=%d.%02d H=%d.%02d L=%d%% M=%d\r\n",
+                     t_int, t_frac, h_int, h_frac, sd.lightLevel,
+                     sd.motionDetected ? 1 : 0);
+            UartPrint(buf);
+        }
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(2000));
+    }
+}
+
+/* ---------------- Application entry point (S10) ----------------------- */
 void app_main(void)
 {
     UartPrint("BCA182 FreeRTOS Multisensor\r\n");
     UartPrint("System starting...\r\n");
 
+    /* S41 flow: object creation BEFORE task creation */
+    if (createRtosObjects() != pdPASS) {
+        UartPrint("ERROR: RTOS object creation failed\r\n");
+        while (1) {}
+    }
+
     BaseType_t a = xTaskCreate(TaskA, "TaskA", 256, NULL, 1, NULL);
     BaseType_t b = xTaskCreate(TaskB, "TaskB", 256, NULL, 1, NULL);
     BaseType_t s = xTaskCreate(SensorTask, "Sensor", 512, NULL, 2, NULL);
+    BaseType_t g = xTaskCreate(LogTask, "Log", 256, NULL, 1, NULL);
 
 #if DIAGNOSTIC_MODE
     if (a != pdPASS) UartPrint("ERROR: TaskA creation failed\r\n");
     if (b != pdPASS) UartPrint("ERROR: TaskB creation failed\r\n");
     if (s != pdPASS) UartPrint("ERROR: SensorTask creation failed\r\n");
+    if (g != pdPASS) UartPrint("ERROR: LogTask creation failed\r\n");
     UartPrint("Starting scheduler...\r\n");
 #else
-    (void)a; (void)b; (void)s;
+    (void)a; (void)b; (void)s; (void)g;
 #endif
 
     vTaskStartScheduler();
@@ -301,9 +296,7 @@ void app_main(void)
     while (1) {}
 }
 
-/* ---------------------------------------------------------
- * main: hardware initialization only (Section 41)
- * --------------------------------------------------------- */
+/* ---------------- main: hardware init only (S41) ---------------------- */
 int main(void)
 {
     HAL_Init();
@@ -325,13 +318,10 @@ int main(void)
     HAL_GPIO_Init(GPIOC, &led);
 
     app_main();
-
     return 0;
 }
 
-/* ---------------------------------------------------------
- * Clock (8 MHz HSI) and peripherals
- * --------------------------------------------------------- */
+/* ---------------- Clock + peripherals (unchanged) --------------------- */
 void SystemClock_Config(void)
 {
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -385,12 +375,12 @@ static void MX_ADC1_Init(void)
     HAL_ADC_Init(&hadc1);
 
     ADC_ChannelConfTypeDef sConfig = {0};
-    sConfig.Channel      = ADC_CHANNEL_0;      /* PA0 */
+    sConfig.Channel      = ADC_CHANNEL_0;
     sConfig.Rank         = ADC_REGULAR_RANK_1;
     sConfig.SamplingTime = ADC_SAMPLETIME_55CYCLES_5;
     HAL_ADC_ConfigChannel(&hadc1, &sConfig);
 
-    HAL_ADCEx_Calibration_Start(&hadc1);       /* F1: calibrate before use */
+    HAL_ADCEx_Calibration_Start(&hadc1);
 }
 
 extern "C" void HAL_UART_MspInit(UART_HandleTypeDef *huart)
