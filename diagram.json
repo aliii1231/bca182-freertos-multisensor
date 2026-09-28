@@ -12,8 +12,8 @@
     }
   ],
   "connections": [
-    [ "stm32:A9", "$serialMonitor:RX", "green", [] ],
-    [ "stm32:A10", "$serialMonitor:TX", "green", [] ]
+    [ "$serialMonitor:TX", "stm32:A10", "", [] ],
+    [ "$serialMonitor:RX", "stm32:A9", "", [] ]
   ],
   "dependencies": {}
 }
