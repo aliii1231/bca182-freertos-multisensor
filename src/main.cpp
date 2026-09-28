@@ -1,17 +1,28 @@
+/**
+ * BCA182 - Laboratory Activity No. 1
+ * PART III (done) + PART IV step 1: DHT22 sensor acquisition (Section 20)
+ *
+ * Hardware init -> app_main() -> task creation -> scheduler (S10/S41).
+ * HAL timebase on TIM4; SysTick reserved for FreeRTOS.
+ * UART not yet mutex-protected: TaskA/TaskB/SensorTask prints are
+ * phase-offset; the Part XI serial mutex is the proper fix.
+ */
 #include "stm32f1xx_hal.h"
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "dht22.h"
 
-/* 1 = print scheduler counters + a status line every 2 s (debugging)
- * 0 = exact Part III lab output (Task A running / Task B running)   */
+/* 1 = scheduler counters + status line (debugging)
+ * 0 = clean lab output                                          */
 #define DIAGNOSTIC_MODE  0
 
 UART_HandleTypeDef huart1;
 extern "C" uint32_t g_pfnVectors[];
 
-/* Exported by src/port.c */
+/* Instrumented port counters (src/port.c) — diagnostic only */
 extern "C" volatile uint32_t g_portFirstLaunchCount;
 extern "C" volatile uint32_t g_portYieldCount;
 extern "C" volatile uint32_t g_portTickSwitchCount;
@@ -23,9 +34,7 @@ static void MX_USART1_UART_Init(void);
 void app_main(void);
 
 /* ---------------------------------------------------------
- * UART output (USART1: PA9 = TX, PA10 = RX -> Wokwi serial).
- * HAL_UART_Transmit is not thread-safe; the tasks are offset so they
- * never print at the same time. The Part XI mutex is the real fix.
+ * UART output (USART1: PA9 = TX, PA10 = RX -> Wokwi terminal).
  * --------------------------------------------------------- */
 static void UartPrint(const char *s)
 {
@@ -61,9 +70,6 @@ static void UartPrintHex(uint32_t v)
 }
 
 #if DIAGNOSTIC_MODE
-/* Status line printed from the HAL tick ISR. It keeps running even if both
- * tasks are stuck, so a stall still tells us what state the scheduler is in.
- * sched: 0 = suspended, 1 = not started, 2 = running. */
 static void PrintStatus(void)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) return;
@@ -81,10 +87,9 @@ static void PrintStatus(void)
 #endif
 
 /* ---------------------------------------------------------
- * HAL tick on TIM4 so HAL does not fight FreeRTOS for SysTick.
- * NOTE: PSC=7 assumes HCLK = 8 MHz (HSI). If SystemClock_Config is
- * ever changed to 72 MHz, TIM4 prescaler must become 71 (72/8 MHz)
- * and configCPU_CLOCK_HZ must be updated to match.
+ * HAL timebase on TIM4 — SysTick belongs to FreeRTOS.
+ * PSC assumes HCLK = 8 MHz (HSI). If the clock is ever changed
+ * to 72 MHz, PSC must become 71 AND configCPU_CLOCK_HZ updated.
  * --------------------------------------------------------- */
 extern "C" HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
 {
@@ -116,7 +121,7 @@ extern "C" void TIM4_IRQHandler(void)
 }
 
 /* ---------------------------------------------------------
- * HardFault reporter: turns a silent hang into a message.
+ * HardFault reporter
  * --------------------------------------------------------- */
 extern "C" void HardFault_C(uint32_t *frame)
 {
@@ -144,7 +149,7 @@ extern "C" __attribute__((naked)) void HardFault_Handler(void)
 }
 
 /* ---------------------------------------------------------
- * FreeRTOS hooks required by FreeRTOSConfig.h
+ * FreeRTOS hooks
  * --------------------------------------------------------- */
 extern "C" void vApplicationIdleHook(void)
 {
@@ -178,10 +183,8 @@ extern "C" void vAssertCalled(const char *file, int line)
 }
 
 /* ---------------------------------------------------------
- * Part III tasks: same priority (1), 1000 ms period, periodic via
- * vTaskDelayUntil(). TaskB blocks for 500 ms BEFORE its first print,
- * so the two tasks never print at the same moment and output
- * alternates A, B, A, B.
+ * Part III tasks: priority 1, 1000 ms, vTaskDelayUntil().
+ * TaskB 500 ms phase offset -> deterministic A/B alternation.
  * --------------------------------------------------------- */
 void TaskA(void *pvParameters)
 {
@@ -199,7 +202,7 @@ void TaskA(void *pvParameters)
 #else
         UartPrint("Task A running\r\n");
 #endif
-        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));   /* Blocked */
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
 
@@ -207,7 +210,7 @@ void TaskB(void *pvParameters)
 {
     (void)pvParameters;
 
-    vTaskDelay(pdMS_TO_TICKS(500));               /* one-time phase offset */
+    vTaskDelay(pdMS_TO_TICKS(500));
     TickType_t lastWakeTime = xTaskGetTickCount();
 
     for (;;) {
@@ -218,14 +221,47 @@ void TaskB(void *pvParameters)
 #else
         UartPrint("Task B running\r\n");
 #endif
-        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));   /* Blocked */
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1000));
     }
 }
 
 /* ---------------------------------------------------------
- * Application entry point (Section 10 of the lab manual).
- * Hardware-independent of main(): performs startup banner,
- * FreeRTOS task creation, and hands control to the scheduler.
+ * SensorTask (Sections 20-22): DHT22 every 2000 ms via
+ * vTaskDelayUntil() — the lab's required periodic pattern.
+ * Prints fixed-point without -u _printf_float.
+ * --------------------------------------------------------- */
+void SensorTask(void *pvParameters)
+{
+    (void)pvParameters;
+    dht22_init();
+
+    TickType_t lastWakeTime = xTaskGetTickCount();
+
+    for (;;) {
+        DHT22_Result_t d = dht22_read();
+
+        if (d.valid) {
+            /* 25.4 C -> "25.40"; 61.2 % -> "61.20" */
+            int  t_int  = (int)d.temperature;
+            int  t_frac = (int)((d.temperature - (float)t_int) * 100.0f);
+            int  h_int  = (int)d.humidity;
+            int  h_frac = (int)((d.humidity - (float)h_int) * 100.0f);
+
+            char buf[48];
+            snprintf(buf, sizeof(buf),
+                     "Temperature: %d.%02d C\r\nHumidity: %d.%02d %%\r\n",
+                     t_int, t_frac, h_int, h_frac);
+            UartPrint(buf);
+        } else {
+            UartPrint("DHT22 read failed\r\n");
+        }
+
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(2000));
+    }
+}
+
+/* ---------------------------------------------------------
+ * Application entry point (Section 10)
  * --------------------------------------------------------- */
 void app_main(void)
 {
@@ -234,13 +270,15 @@ void app_main(void)
 
     BaseType_t a = xTaskCreate(TaskA, "TaskA", 256, NULL, 1, NULL);
     BaseType_t b = xTaskCreate(TaskB, "TaskB", 256, NULL, 1, NULL);
+    BaseType_t s = xTaskCreate(SensorTask, "Sensor", 512, NULL, 2, NULL);
 
 #if DIAGNOSTIC_MODE
     if (a != pdPASS) UartPrint("ERROR: TaskA creation failed\r\n");
     if (b != pdPASS) UartPrint("ERROR: TaskB creation failed\r\n");
+    if (s != pdPASS) UartPrint("ERROR: SensorTask creation failed\r\n");
     UartPrint("Starting scheduler...\r\n");
 #else
-    (void)a; (void)b;
+    (void)a; (void)b; (void)s;
 #endif
 
     vTaskStartScheduler();
@@ -250,7 +288,7 @@ void app_main(void)
 }
 
 /* ---------------------------------------------------------
- * main: hardware initialization only (Section 41), then app_main().
+ * main: hardware initialization only (Section 41)
  * --------------------------------------------------------- */
 int main(void)
 {
@@ -264,7 +302,6 @@ int main(void)
 
     MX_USART1_UART_Init();
 
-    /* PC13 (on-board LED) as output, used only as an idle-hook heartbeat */
     __HAL_RCC_GPIOC_CLK_ENABLE();
     GPIO_InitTypeDef led = {0};
     led.Pin   = GPIO_PIN_13;
@@ -278,7 +315,7 @@ int main(void)
 }
 
 /* ---------------------------------------------------------
- * Clock and UART setup
+ * Clock (8 MHz HSI) and USART1
  * --------------------------------------------------------- */
 void SystemClock_Config(void)
 {
