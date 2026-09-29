@@ -13,69 +13,92 @@
 #define FB_H             64
 #define FONT_W           5
 #define FONT_H           8
+#define OLED_DATA_CHUNK  64
 
-static uint8_t  fb[FB_H / 8][FB_W];
+static uint8_t fb[FB_H / 8][FB_W];
+static bool bus_initialized = false;
+static bool oled_ok = true;
+static uint8_t oled_error = 0;
 
-static void sw_i2c_delay(void)
+static inline void i2c_delay(void)
 {
-    for (volatile uint32_t i = 0; i < 24; i++) { __NOP(); }
+    for (volatile uint32_t i = 0; i < 6; i++) {
+        __NOP();
+    }
 }
 
-static void sw_sda(bool high)
+static inline void sda_high(void) { GPIOB->BSRR = GPIO_PIN_7; }
+static inline void sda_low(void)  { GPIOB->BRR = GPIO_PIN_7; }
+static inline void scl_high(void) { GPIOB->BSRR = GPIO_PIN_6; }
+static inline void scl_low(void)  { GPIOB->BRR = GPIO_PIN_6; }
+
+static void i2c_start(void)
 {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    sda_high(); scl_high(); i2c_delay();
+    sda_low(); i2c_delay(); scl_low(); i2c_delay();
 }
 
-static void sw_scl(bool high)
+static void i2c_stop(void)
 {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, high ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    sda_low(); i2c_delay(); scl_high(); i2c_delay(); sda_high(); i2c_delay();
 }
 
-static void sw_start(void)
-{
-    sw_sda(true); sw_scl(true); sw_i2c_delay();
-    sw_sda(false); sw_i2c_delay(); sw_scl(false);
-}
-
-static void sw_stop(void)
-{
-    sw_sda(false); sw_i2c_delay(); sw_scl(true); sw_i2c_delay(); sw_sda(true);
-}
-
-static void sw_write_byte(uint8_t value)
+static bool i2c_write_byte(uint8_t value)
 {
     for (uint8_t bit = 0; bit < 8; bit++) {
-        sw_sda((value & 0x80U) != 0U);
-        sw_i2c_delay(); sw_scl(true); sw_i2c_delay(); sw_scl(false);
+        (value & 0x80U) ? sda_high() : sda_low();
         value <<= 1;
+        i2c_delay(); scl_high(); i2c_delay(); scl_low(); i2c_delay();
     }
-    sw_sda(true); sw_i2c_delay(); sw_scl(true); sw_i2c_delay(); sw_scl(false);
+    sda_high(); i2c_delay(); scl_high(); i2c_delay();
+    bool acknowledged = (GPIOB->IDR & GPIO_PIN_7) == 0;
+    scl_low(); i2c_delay();
+    return acknowledged;
+}
+
+static bool send_data(const uint8_t *data, uint16_t count)
+{
+    i2c_start();
+    bool acknowledged = i2c_write_byte((uint8_t)OLED_ADDR);
+    acknowledged = i2c_write_byte(0x40) && acknowledged;
+    for (uint16_t i = 0; i < count; i++) {
+        acknowledged = i2c_write_byte(data[i]) && acknowledged;
+    }
+    i2c_stop();
+    return acknowledged;
 }
 
 static void cmd(uint8_t c)
 {
-    sw_start();
-    sw_write_byte(OLED_ADDR);
-    sw_write_byte(0x00);
-    sw_write_byte(c);
-    sw_stop();
+    i2c_start();
+    bool acknowledged = i2c_write_byte((uint8_t)OLED_ADDR);
+    acknowledged = i2c_write_byte(0x00) && acknowledged;
+    acknowledged = i2c_write_byte(c) && acknowledged;
+    i2c_stop();
+    if (!acknowledged) {
+        oled_ok = false;
+        oled_error = 2;
+    }
 }
 
 static void flush(void)
 {
-    static uint8_t packet[FB_W + 1];
-    packet[0] = 0x40;                /* SSD1306 data stream marker */
+    static uint8_t packet[OLED_DATA_CHUNK];
 
-    /* Page-sized transfers are accepted reliably by the Wokwi SSD1306. */
+    cmd(0x21);                       /* column address window */
+    cmd(0x00);
+    cmd(FB_W - 1);
+    cmd(0x22);                       /* page address window */
+    cmd(0x00);
+    cmd((FB_H / 8) - 1);
+
     for (uint8_t page = 0; page < FB_H / 8; page++) {
-        cmd((uint8_t)(0xB0 | page));
-        cmd(0x00);                   /* lower column nibble */
-        cmd(0x10);                   /* upper column nibble */
-        memcpy(&packet[1], &fb[page][0], FB_W);
-        sw_start();
-        sw_write_byte(OLED_ADDR);
-        for (uint16_t i = 0; i < sizeof packet; i++) sw_write_byte(packet[i]);
-        sw_stop();
+        for (uint16_t column = 0; column < FB_W; column += OLED_DATA_CHUNK) {
+            memcpy(packet, &fb[page][column], OLED_DATA_CHUNK);
+            if (!send_data(packet, OLED_DATA_CHUNK)) {
+                oled_ok = false; oled_error = 3;
+            }
+        }
     }
 }
 
@@ -178,43 +201,53 @@ static const uint8_t font5x8[][5] = {
     {0x00,0x41,0x36,0x08,0x00}, /* '}'  */
 };
 
-void oled_init(void)
+void oled_bus_init(void)
 {
-    __HAL_RCC_AFIO_CLK_ENABLE();
+    if (bus_initialized) return;
+
     __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_I2C1_CLK_ENABLE();
 
     GPIO_InitTypeDef g = {0};
     g.Pin = GPIO_PIN_6 | GPIO_PIN_7;     /* B6=SCL, B7=SDA */
-    g.Mode = GPIO_MODE_AF_OD;            /* F1: alternate-function open-drain */
+    g.Mode = GPIO_MODE_OUTPUT_OD;        /* Direct GPIO I2C, matching reference */
     g.Pull = GPIO_PULLUP;
     g.Speed = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(GPIOB, &g);
 
-    /* Open-drain outputs release high and pull low for software I2C. */
-    sw_sda(true);
-    sw_scl(true);
+    sda_high();
+    scl_high();
+    bus_initialized = true;
+}
 
-    HAL_Delay(50);                       /* power-up settle */
+bool oled_init(void)
+{
+    oled_bus_init();
 
-    /* SSD1306 init sequence (reset defaults + known-good config) */
-    cmd(0xAE);                           /* display off         */
-    cmd(0xD5); cmd(0x80);                /* clock divide        */
-    cmd(0xA8); cmd(0x3F);                /* multiplex 64        */
-    cmd(0xD3); cmd(0x00);                /* display offset      */
-    cmd(0x40);                           /* start line 0        */
-    cmd(0x8D); cmd(0x14);                /* charge pump ON      */
-    cmd(0x20); cmd(0x00);                /* horizontal addressing */
-    cmd(0xA1);                           /* segment remap       */
-    cmd(0xC8);                           /* COM scan reversed   */
-    cmd(0xDA); cmd(0x12);                /* COM pins            */
-    cmd(0x81); cmd(0xCF);                /* contrast            */
-    cmd(0xD9); cmd(0xF1);                /* precharge           */
-    cmd(0xDB); cmd(0x40);                /* VCOM detect         */
-    cmd(0xA4);                           /* display from RAM    */
-    cmd(0xA6);                           /* non-inverted        */
-    oled_clear();
-    cmd(0xAF);                           /* display ON          */
+    /* SSD1306 init sequence matched to the working RENE reference. */
+    cmd(0xAE);
+    cmd(0x20); cmd(0x00);
+    cmd(0xB0);
+    cmd(0xC8);
+    cmd(0x00); cmd(0x10);
+    cmd(0x40);
+    cmd(0x81); cmd(0xFF);
+    cmd(0xA1);
+    cmd(0xA6);
+    cmd(0xA8); cmd(0x3F);
+    cmd(0xA4);
+    cmd(0xD3); cmd(0x00);
+    cmd(0xD5); cmd(0xF0);
+    cmd(0xD9); cmd(0x22);
+    cmd(0xDA); cmd(0x12);
+    cmd(0xDB); cmd(0x20);
+    cmd(0x8D); cmd(0x14);
+    cmd(0xAF);
+    return oled_ok;
+}
+
+uint8_t oled_error_stage(void)
+{
+    return oled_error;
 }
 
 void oled_clear(void)

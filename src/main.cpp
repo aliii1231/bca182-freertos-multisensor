@@ -47,7 +47,6 @@ static void MX_ADC1_Init(void);
 static void MX_ENCODER_Init(void);
 static void MX_BUZZER_Init(void);
 static void MX_PIR_Init(void);
-static void I2C_Scan(void);
 void app_main(void);
 
 static DisplayMode nextDisplayMode(DisplayMode current)
@@ -136,8 +135,8 @@ static void PrintStatus(void)
 extern "C" HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
 {
     __HAL_RCC_TIM4_CLK_ENABLE();
-    TIM4->PSC = 7;              /* 8 MHz / 8 = 1 MHz */
-    TIM4->ARR = 999;            /* 1 kHz -> 1 ms     */
+    TIM4->PSC = 7;
+    TIM4->ARR = 999;
     TIM4->CNT = 0;
     TIM4->DIER |= TIM_DIER_UIE;
     TIM4->CR1 |= TIM_CR1_CEN;
@@ -370,8 +369,13 @@ void InputTask(void *pvParameters)
 void DisplayTask(void *pvParameters)
 {
     (void)pvParameters;
-    oled_init();
-    UartPrint("[DISPLAY] ready\r\n");
+    if (oled_init()) {
+        UartPrint("[DISPLAY] ready\r\n");
+    } else {
+        UartPrint("[DISPLAY] I2C ERROR stage=");
+        UartPrintNum(oled_error_stage());
+        UartPrint("\r\n");
+    }
 
     TickType_t lastWake = xTaskGetTickCount();
     char line[24];
@@ -393,10 +397,11 @@ void DisplayTask(void *pvParameters)
             oled_show_text(10, 0, "ROOM MONITOR");
 
             if (mode == DISPLAY_TEMPERATURE) {
-                int t_int = (int)sd.temperature;
-                int t_frac = (int)((sd.temperature - (float)t_int) * 10.0f);
+                int t_tenths = (int)(sd.temperature * 10.0f + 0.5f);
+                int t_int = t_tenths / 10;
+                int t_frac = t_tenths % 10;
                 oled_show_text(10, 2, "Temperature");
-                snprintf(line, sizeof(line), "%d.%u C", t_int, (unsigned)t_frac);
+                snprintf(line, sizeof(line), "%d.%d C", t_int, t_frac);
             } else if (mode == DISPLAY_HUMIDITY) {
                 int h_int = (int)sd.humidity;
                 int h_frac = (int)((sd.humidity - (float)h_int) * 10.0f);
@@ -420,55 +425,12 @@ void DisplayTask(void *pvParameters)
 }
 
 /* ---------------------------------------------------------
- * I2C1 bring-up + bus scan (S26 diagnostic).
- * Reports every device that ACKs on the bus. Expected for the
- * SSD1306: 0x3C (or 0x3D if its SA0 pin is strapped high).
- * Note: this RE-initializes I2C1 with the same config that
- * oled_init() uses, so it is safe to run before the scheduler.
- * --------------------------------------------------------- */
-static void I2C_Scan(void)
-{
-    __HAL_RCC_AFIO_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_I2C1_CLK_ENABLE();
-
-    GPIO_InitTypeDef g = {0};
-    g.Pin   = GPIO_PIN_6 | GPIO_PIN_7;    /* B6=SCL, B7=SDA */
-    g.Mode  = GPIO_MODE_AF_OD;
-    g.Pull  = GPIO_PULLUP;
-    g.Speed = GPIO_SPEED_FREQ_HIGH;
-    HAL_GPIO_Init(GPIOB, &g);
-
-    hi2c1.Instance             = I2C1;
-    hi2c1.Init.ClockSpeed      = 100000;
-    hi2c1.Init.DutyCycle       = I2C_DUTYCYCLE_2;
-    hi2c1.Init.OwnAddress1     = 0;
-    hi2c1.Init.AddressingMode  = I2C_ADDRESSINGMODE_7BIT;
-    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-    hi2c1.Init.NoStretchMode   = I2C_NOSTRETCH_DISABLE;
-    HAL_I2C_Init(&hi2c1);
-
-    UartPrint("I2C scan:");
-    bool found = false;
-    for (uint8_t a = 0x03; a <= 0x77; a++) {
-        if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 2, 10) == HAL_OK) {
-            char b[16];
-            snprintf(b, sizeof(b), " 0x%02X", a);
-            UartPrint(b);
-            found = true;
-        }
-    }
-    UartPrint(found ? "\r\n" : " none\r\n");
-}
-
-/* ---------------------------------------------------------
  * Application entry point (Section 10)
  * --------------------------------------------------------- */
 void app_main(void)
 {
     UartPrint("BCA182 FreeRTOS Multisensor\r\n");
     UartPrint("System starting...\r\n");
-    I2C_Scan();          /* S26 diagnostic: proves the OLED is on the bus */
 
     /* S41 flow: object creation BEFORE task creation */
     if (createRtosObjects() != pdPASS) {
@@ -680,3 +642,4 @@ extern "C" void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
         HAL_GPIO_Init(GPIOB, &gpio);
     }
 }
+

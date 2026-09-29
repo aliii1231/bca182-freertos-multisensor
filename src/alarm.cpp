@@ -19,7 +19,7 @@ void AlarmTask(void *pvParameters)
 
     for (;;) {
         SensorData sample;
-        if (xQueueReceive(xSensorQueue, &sample, 0) == pdTRUE) {
+        if (xQueuePeek(xSensorQueue, &sample, 0) == pdTRUE) {
             AlarmState state = evaluateTemperature(sample.temperature);
             alarming = state != AlarmState::NORMAL;
             if (!alarming) {
