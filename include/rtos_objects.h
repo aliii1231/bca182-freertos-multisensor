@@ -4,6 +4,7 @@
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "event_groups.h" // Required for Event Groups
+#include "semphr.h" // Required for mutexes
 
 // Existing structs and enums...
 enum DisplayMode {
@@ -29,6 +30,9 @@ struct SensorData {
 extern QueueHandle_t xSensorQueue;
 extern QueueHandle_t xNavQueue;
 extern QueueHandle_t xMotionQueue;
+
+// Part XI: Mutex for shared UART resource
+extern SemaphoreHandle_t xSerialMutex;
 
 // Part X: Event Group and Bits (Lab Manual Section 35)
 extern EventGroupHandle_t xSystemEventGroup;

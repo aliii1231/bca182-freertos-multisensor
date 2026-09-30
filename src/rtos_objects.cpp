@@ -11,6 +11,7 @@ QueueHandle_t xSensorQueue      = NULL;
 QueueHandle_t xNavQueue         = NULL;
 QueueHandle_t xMotionQueue      = NULL;
 EventGroupHandle_t xSystemEventGroup = NULL;
+SemaphoreHandle_t xSerialMutex  = NULL; // Define mutex handle
 
 BaseType_t createRtosObjects(void)
 {
@@ -27,5 +28,9 @@ BaseType_t createRtosObjects(void)
     xSystemEventGroup = xEventGroupCreate();
     if (xSystemEventGroup == NULL) { return pdFAIL; }
 
+    // Part XI: Create the Mutex for thread-safe Serial output
+    xSerialMutex = xSemaphoreCreateMutex();
+    if (xSerialMutex == NULL) { return pdFAIL; }
+    
     return pdPASS;
 }

@@ -7,6 +7,7 @@
  * PART V: SensorData struct + latest-value queue (rtos_objects)
  * PART IV: DHT22 + LDR sensor acquisition (S20-S22)
  * PART III: FreeRTOS foundation (S17)
+ * PART XI: Mutex protecting shared UART serial output
  *
  * Hardware init -> app_main() -> object creation -> task creation ->
  * scheduler (S10/S41). HAL timebase on TIM4; SysTick = FreeRTOS.
@@ -17,6 +18,7 @@
 #include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 #include "dht22.h"
 #include "rtos_objects.h"
 #include "oled.h"
@@ -76,10 +78,18 @@ static const char *displayModeName(DisplayMode mode)
 
 /* ---------------------------------------------------------
  * UART output (USART1: PA9 = TX, PA10 = RX -> Wokwi terminal).
+ * Protected by xSerialMutex for Part XI (Mutex).
  * --------------------------------------------------------- */
 static void UartPrint(const char *s)
 {
-    HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), HAL_MAX_DELAY);
+    if (xSerialMutex != NULL) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+            HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), HAL_MAX_DELAY);
+            xSemaphoreGive(xSerialMutex);
+        }
+    } else {
+        HAL_UART_Transmit(&huart1, (uint8_t *)s, (uint16_t)strlen(s), HAL_MAX_DELAY);
+    }
 }
 
 static void UartPrintNum(unsigned long val)
