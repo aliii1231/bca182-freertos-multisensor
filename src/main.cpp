@@ -23,6 +23,7 @@
 #include "alarm.h"
 #include "motion.h"
 #include "system_state.h"
+#include "input.h"
 
 /* 1 = scheduler counters + status line (debugging)
  * 0 = clean lab output                                          */
@@ -44,7 +45,6 @@ extern "C" uint32_t ulPortGetCriticalNesting(void);
 void SystemClock_Config(void);
 static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
-static void MX_ENCODER_Init(void);
 static void MX_BUZZER_Init(void);
 static void MX_PIR_Init(void);
 void app_main(void);
@@ -322,46 +322,6 @@ void SensorTask(void *pvParameters)
 }
 
 /* ---------------------------------------------------------
- * InputTask (S28-S29): poll the rotary encoder and publish
- * navigation commands. PB10/PB11 use internal pull-ups.
- * --------------------------------------------------------- */
-void InputTask(void *pvParameters)
-{
-    (void)pvParameters;
-    uint8_t previousState = 0;
-    int8_t transitionSum = 0;
-
-    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_SET) previousState |= 2;
-    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) == GPIO_PIN_SET) previousState |= 1;
-    UartPrint("[INPUT] ready\r\n");
-
-    for (;;) {
-        uint8_t currentState = 0;
-        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_SET) currentState |= 2;
-        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_11) == GPIO_PIN_SET) currentState |= 1;
-
-        uint8_t transition = (uint8_t)((previousState << 2) | currentState);
-        int8_t delta = 0;
-        switch (transition) {
-        case 0x01: case 0x07: case 0x0E: case 0x08: delta = 1; break;
-        case 0x02: case 0x0B: case 0x0D: case 0x04: delta = -1; break;
-        default: break;
-        }
-
-        transitionSum += delta;
-        previousState = currentState;
-
-        if (transitionSum >= 4 || transitionSum <= -4) {
-            NavCommand command = transitionSum >= 4 ? NAV_NEXT : NAV_PREV;
-            xQueueSend(xNavQueue, &command, 0);
-            transitionSum = 0;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(5));
-    }
-}
-
-/* ---------------------------------------------------------
  * DisplayTask (S26-S27): SOLE owner of the OLED. Consumes the
  * sensor queue (peek = latest snapshot) and renders the current
  * page. No other task touches I2C1 or the framebuffer.
@@ -372,13 +332,11 @@ void DisplayTask(void *pvParameters)
     if (oled_init()) {
         UartPrint("[DISPLAY] ready\r\n");
     } else {
-        UartPrint("[DISPLAY] I2C ERROR stage=");
-        UartPrintNum(oled_error_stage());
-        UartPrint("\r\n");
+        UartPrint("[DISPLAY] I2C ERROR\r\n");
     }
 
     TickType_t lastWake = xTaskGetTickCount();
-    char line[24];
+    char line[32]; 
     DisplayMode mode = DISPLAY_TEMPERATURE;
 
     for (;;) {
@@ -394,30 +352,32 @@ void DisplayTask(void *pvParameters)
         SensorData sd;
         if (xQueuePeek(xSensorQueue, &sd, 0) == pdTRUE) {
             oled_clear();
+            
+            // Draw the top header
             oled_show_text(10, 0, "ROOM MONITOR");
 
+            // Prepare the string for the specific sensor
             if (mode == DISPLAY_TEMPERATURE) {
                 int t_tenths = (int)(sd.temperature * 10.0f + 0.5f);
                 int t_int = t_tenths / 10;
                 int t_frac = t_tenths % 10;
-                oled_show_text(10, 2, "Temperature");
-                snprintf(line, sizeof(line), "%d.%d C", t_int, t_frac);
+                snprintf(line, sizeof(line), "Temp: %d.%d C", t_int, t_frac);
             } else if (mode == DISPLAY_HUMIDITY) {
                 int h_int = (int)sd.humidity;
                 int h_frac = (int)((sd.humidity - (float)h_int) * 10.0f);
-                oled_show_text(10, 2, "Humidity");
-                snprintf(line, sizeof(line), "%d.%u %%", h_int, (unsigned)h_frac);
+                snprintf(line, sizeof(line), "Humid: %d.%u %%", h_int, (unsigned)h_frac);
             } else if (mode == DISPLAY_LIGHT) {
-                oled_show_text(10, 2, "Light");
-                snprintf(line, sizeof(line), "%d %%", sd.lightLevel);
+                snprintf(line, sizeof(line), "Light: %d %%", sd.lightLevel);
             } else {
-                oled_show_text(10, 2, "Motion");
-                snprintf(line, sizeof(line), "%s", sd.motionDetected ? "YES" : "NO");
+                snprintf(line, sizeof(line), "Motion: %s", sd.motionDetected ? "YES" : "NO");
             }
-            oled_show_text(10, 4, line);
+            
+            // Draw the formatted text cleanly underneath
+            oled_show_text(10, 3, line);
+            
         } else {
             oled_clear();
-            oled_show_text(10, 2, "NO DATA");
+            oled_show_text(10, 3, "NO DATA");
         }
 
         vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(500));
@@ -574,17 +534,6 @@ static void MX_ADC1_Init(void)
     HAL_ADCEx_Calibration_Start(&hadc1);       /* F1: calibrate before use */
 }
 
-static void MX_ENCODER_Init(void)
-{
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-
-    GPIO_InitTypeDef gpio = {0};
-    gpio.Pin = GPIO_PIN_10 | GPIO_PIN_11;
-    gpio.Mode = GPIO_MODE_INPUT;
-    gpio.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(GPIOB, &gpio);
-}
-
 static void MX_BUZZER_Init(void)
 {
     __HAL_RCC_GPIOB_CLK_ENABLE();
@@ -642,4 +591,3 @@ extern "C" void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
         HAL_GPIO_Init(GPIOB, &gpio);
     }
 }
-
