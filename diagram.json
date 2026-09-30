@@ -6,7 +6,7 @@
     { "type": "board-stm32-bluepill", "id": "stm32", "top": 120, "left": 280, "attrs": {} },
     { "type": "board-ssd1306", "id": "oled1", "top": 100, "left": 40, "attrs": {} },
     { "type": "wokwi-ky-040", "id": "encoder1", "top": 40, "left": 470, "attrs": {} },
-    { "type": "wokwi-buzzer", "id": "buzzer1", "top": 230, "left": 700, "attrs": { "volume": "0.2" } },
+    { "type": "wokwi-buzzer", "id": "buzzer1", "top": 230, "left": 700, "attrs": { "volume": "1.0" } },
     { "type": "wokwi-pir-motion-sensor", "id": "pir1", "top": 250, "left": 480, "attrs": {} },
     { "type": "wokwi-dht22", "id": "dht1", "top": 310, "left": 480, "attrs": { "temperature": "25.4", "humidity": "60" } },
     { "type": "wokwi-resistor", "id": "dhtPullup", "top": 360, "left": 390, "attrs": { "value": "10k" } },

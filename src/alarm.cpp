@@ -3,7 +3,7 @@
 #include "rtos_objects.h"
 
 #define BUZZER_GPIO_PORT GPIOB
-#define BUZZER_GPIO_PIN  GPIO_PIN_12
+#define BUZZER_GPIO_PIN GPIO_PIN_12
 
 AlarmState evaluateTemperature(float temperature)
 {
@@ -15,20 +15,22 @@ AlarmState evaluateTemperature(float temperature)
 void AlarmTask(void *pvParameters)
 {
     (void)pvParameters;
-    bool alarming = false;
-
+    
     for (;;) {
         SensorData sample;
-        if (xQueuePeek(xSensorQueue, &sample, 0) == pdTRUE) {
+        if (xQueuePeek(xSensorQueue, &sample, pdMS_TO_TICKS(100)) == pdTRUE) {
             AlarmState state = evaluateTemperature(sample.temperature);
-            alarming = state != AlarmState::NORMAL;
-            if (!alarming) {
+            
+            if (state == AlarmState::NORMAL) {
+                // Turn buzzer off
                 HAL_GPIO_WritePin(BUZZER_GPIO_PORT, BUZZER_GPIO_PIN, GPIO_PIN_RESET);
+            } else {
+                // Toggle buzzer to create a pulsing alarm sound
+                HAL_GPIO_TogglePin(BUZZER_GPIO_PORT, BUZZER_GPIO_PIN);
             }
-        } else if (alarming) {
-            HAL_GPIO_TogglePin(BUZZER_GPIO_PORT, BUZZER_GPIO_PIN);
         }
-
-        vTaskDelay(alarming ? pdMS_TO_TICKS(1) : pdMS_TO_TICKS(10));
+        
+        // Use a balanced 250ms delay so it beeps cleanly WITHOUT starving the DisplayTask
+        vTaskDelay(pdMS_TO_TICKS(2500)); 
     }
 }
