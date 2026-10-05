@@ -79,7 +79,7 @@ footer { color: var(--muted); font: 8pt Arial, sans-serif; text-align: center; }
 
 <h2>6. Static Code Analysis</h2>
 <p>Command: <code>python -m platformio check</code></p>
-<p>The recorded result is 0 high, 0 medium, and 43 low-severity findings. Most low findings are per-file <code>unusedFunction</code> reports caused by cross-translation-unit calls, task entry points, and interrupt handlers. The complete interpretation is in <code>docs/static-analysis.md</code>.</p>
+<p>The recorded result is 0 high, 0 medium, and 42 low-severity findings. Most low findings are per-file <code>unusedFunction</code> reports caused by cross-translation-unit calls, task entry points, and interrupt handlers. The complete interpretation is in <code>docs/static-analysis.md</code>.</p>
 
 <h2>7. Engineering Discussion</h2>
 <p>Latest-value queues are appropriate because consumers need the current sensor and motion state rather than a historical stream. The OLED has a single owning task to avoid competing I2C transactions. The event group provides shared activity, motion, and alarm status signals.</p>

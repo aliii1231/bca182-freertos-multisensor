@@ -6,7 +6,7 @@ Command:
 python -m platformio check
 ```
 
-Result recorded on 2026-10-05: **PASSED**, with 0 high, 0 medium, and 43 low
+Result recorded on 2026-10-05: **PASSED**, with 0 high, 0 medium, and 42 low
 findings reported by cppcheck.
 
 Most findings are `unusedFunction` reports. PlatformIO analyzes source files

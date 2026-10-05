@@ -317,16 +317,12 @@ PASS/FAIL result:
 ### What is still missing
 
 The Wokwi screenshots above document a real run and show motion detection,
-`STATE: ACTIVE`, and `STATE: INACTIVE`. These observations have been recorded
-as PASS for FT-08, FT-09, and FT-10 in the test plan. The remaining functional
-test record is not finished yet. Each test must have an actual observation from
-the simulator before it can be marked **PASS**, as required by the laboratory
-instructions.
+`STATE: ACTIVE`, and `STATE: INACTIVE`. All ten Wokwi functional tests have
+now been observed and recorded as **PASS** in
+[`docs/test-plan.md`](docs/test-plan.md), with supporting screenshots in
+`docs/screenshots/`.
 
-The remaining observations to record in
-[`docs/test-plan.md`](docs/test-plan.md) are:
-
-| Test | Actual observation still required |
+| Test | Recorded observation |
 |---|---|
 | FT-01 | Completed: changing the DHT22 produced repeated serial readings of `Temperature: 11.80 C`. |
 | FT-02 | Completed: changing the DHT22 produced repeated serial readings of `Humidity: 21.00 %`. |
@@ -339,9 +335,11 @@ The remaining observations to record in
 | FT-09 | Completed: after no motion, the system showed `STATE: INACTIVE`. |
 | FT-10 | Completed: motion while inactive returned the system to `STATE: ACTIVE`. |
 
-Do not mark a test as PASS based only on the expected behavior or on a unit
-test. Record the observed serial/OLED result and, where useful, add a
-corresponding screenshot.
+The three deliberate FreeRTOS fault experiments have now been executed,
+documented, and reverted. They are described in
+[`docs/fault-experiments.md`](docs/fault-experiments.md). These experiments
+were performed temporarily and the normal source was restored before
+submission.
 
 ## Engineering Decisions
 
@@ -370,8 +368,6 @@ corresponding screenshot.
 	report is finalized.
 - Add encoder switch handling if the hardware configuration includes the KY-040
 	push button.
-- Record the observations from the fault experiments in
-	[`docs/fault-experiments.md`](docs/fault-experiments.md).
 
 ## References and Acknowledgments
 

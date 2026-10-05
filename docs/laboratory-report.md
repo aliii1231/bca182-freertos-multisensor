@@ -61,8 +61,9 @@ The automated test and firmware-build evidence is recorded in
 [test-plan.md](test-plan.md). On 2026-10-05, all 13 native Unity tests passed
 and the `bluepill_f103c8` firmware build succeeded. The deliberate blocking,
 priority, and mutex experiments are specified in
-[fault-experiments.md](fault-experiments.md); their observations remain to be
-recorded during the final Wokwi session.
+[fault-experiments.md](fault-experiments.md); all three experiments were
+performed temporarily, observed, documented, and reverted before rebuilding the
+normal firmware.
 
 Wokwi functional tests FT-01 through FT-10 have now been observed and
 recorded as PASS. The DHT22 produced changed
@@ -81,7 +82,7 @@ experiments are also listed in the test plan.
 
 The `python -m platformio check` result is documented in
 [static-analysis.md](static-analysis.md). The run passed with no high- or
-medium-severity findings and 43 low-severity findings. The low findings are
+medium-severity findings and 42 low-severity findings. The low findings are
 primarily per-file unused-function reports and boundary casts that require
 review in the context of the embedded build.
 
@@ -102,8 +103,7 @@ centralized alarm level.
 The project demonstrates a modular STM32 FreeRTOS architecture with six
 cooperating tasks, queues, an event group, a mutex, periodic scheduling, a
 state machine, and host-based decision-logic tests. The next verification step
-is to perform the fault experiments and export this report to
-`docs/laboratory-report.pdf` for final submission.
+is to export this report to `docs/laboratory-report.pdf` for final submission.
 
 ## Requirements Traceability
 

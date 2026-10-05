@@ -63,6 +63,6 @@ that the mutex was restored.
 
 | Experiment | Source change | Observation | Restored | Date |
 |---|---|---|---|---|
-| Remove blocking | To be recorded | To be recorded | Pending | |
-| Change priority | To be recorded | To be recorded | Pending | |
-| Remove mutex | To be recorded | To be recorded | Pending | |
+| Remove blocking | Temporarily removed `InputTask`'s 5 ms `vTaskDelay()` | The Wokwi terminal showed startup and repeated `[MOTION] detected` messages, but normal sensor/display output did not continue and the OLED remained blank. This is consistent with `InputTask` starving lower-priority work while it stays Ready/Running. | Yes; delay restored and normal firmware rebuilt successfully | 2026-10-05 |
+| Change priority | Temporarily changed `InputTask` priority from 3 to 7 | Wokwi stopped during startup with `ASSERT failed: .pio\libdeps\bluepill_f103c8\PlatformIO-FreeRTOS\FreeRTOS-Kernel\tasks.c line 1903`. Priority 7 is outside the configured valid application-priority range, so the scheduler did not start normally. | Yes; priority restored to 3 and normal firmware rebuilt successfully | 2026-10-05 |
+| Remove mutex | Temporarily bypassed `xSerialMutex` in `UartPrint()` | Wokwi continued to show readable, complete messages such as sensor samples and input-mode changes. No overlapping or fragmented UART output was observed during this run, although the protection was disabled. | Yes; mutex restored and normal firmware rebuilt successfully | 2026-10-05 |
