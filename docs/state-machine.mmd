@@ -1,0 +1,15 @@
+stateDiagram-v2
+    [*] --> ACTIVE
+    ACTIVE --> INACTIVE: no motion for 15 seconds
+    INACTIVE --> ACTIVE: motion detected
+    ACTIVE --> ACTIVE: motion detected / reset timer
+    INACTIVE --> INACTIVE: no motion
+
+    state ACTIVE {
+        [*] --> Monitoring
+        Monitoring: OLED shows measurement\nSensors and alarm enabled
+    }
+    state INACTIVE {
+        [*] --> Waiting
+        Waiting: PIR remains monitored\nWake on motion
+    }

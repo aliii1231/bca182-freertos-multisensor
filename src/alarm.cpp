@@ -2,8 +2,7 @@
 #include "stm32f1xx_hal.h"
 #include "rtos_objects.h"
 
-#define BUZZER_GPIO_PORT GPIOB
-#define BUZZER_GPIO_PIN GPIO_PIN_12
+extern TIM_HandleTypeDef htim1;
 
 AlarmState evaluateTemperature(float temperature)
 {
@@ -15,22 +14,36 @@ AlarmState evaluateTemperature(float temperature)
 void AlarmTask(void *pvParameters)
 {
     (void)pvParameters;
-    
+
+    bool alarmActive = false;
+    TickType_t lastEvaluation = xTaskGetTickCount();
+
     for (;;) {
-        SensorData sample;
-        if (xQueuePeek(xSensorQueue, &sample, pdMS_TO_TICKS(100)) == pdTRUE) {
-            AlarmState state = evaluateTemperature(sample.temperature);
-            
-            if (state == AlarmState::NORMAL) {
-                // Turn buzzer off
-                HAL_GPIO_WritePin(BUZZER_GPIO_PORT, BUZZER_GPIO_PIN, GPIO_PIN_RESET);
-            } else {
-                // Toggle buzzer to create a pulsing alarm sound
-                HAL_GPIO_TogglePin(BUZZER_GPIO_PORT, BUZZER_GPIO_PIN);
+        TickType_t now = xTaskGetTickCount();
+        if ((now - lastEvaluation) >= pdMS_TO_TICKS(100)) {
+            lastEvaluation = now;
+
+            SensorData sample;
+            if (xQueuePeek(xSensorQueue, &sample, 0) == pdTRUE) {
+                AlarmState state = evaluateTemperature(sample.temperature);
+                alarmActive = state != AlarmState::NORMAL;
+
+                if (xSystemEventGroup != NULL) {
+                    if (alarmActive) {
+                        xEventGroupSetBits(xSystemEventGroup, EVENT_ALARM_BIT2);
+                    } else {
+                        xEventGroupClearBits(xSystemEventGroup, EVENT_ALARM_BIT2);
+                    }
+                }
             }
         }
-        
-        // Use a balanced 250ms delay so it beeps cleanly WITHOUT starving the DisplayTask
-        vTaskDelay(pdMS_TO_TICKS(2500)); 
+
+        if (alarmActive) {
+            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 500);
+        } else {
+            __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

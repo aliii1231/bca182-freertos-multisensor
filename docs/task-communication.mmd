@@ -1,0 +1,15 @@
+flowchart TD
+    S[SensorTask\npriority 2\n2500 ms] -->|xQueueOverwrite SensorData| Q[xSensorQueue]
+    Q -->|xQueuePeek| D[DisplayTask\npriority 1\n500 ms]
+    Q -->|xQueuePeek| A[AlarmTask\npriority 2\n2500 ms]
+    I[InputTask\npriority 3\n5 ms] -->|NavCommand| N[xNavQueue]
+    N --> D
+    M[MotionTask\npriority 3\n100 ms] -->|bool| MQ[xMotionQueue]
+    MQ --> ST[StateTask\npriority 2\n100 ms]
+    M -->|set MOTION bit| E{{xSystemEventGroup}}
+    ST -->|set/clear ACTIVE bit| E
+    A -->|set/clear ALARM bit| E
+    E --> D
+    E --> ST
+    ALL[All diagnostic writers] -->|take/give| MUTEX[xSerialMutex]
+    MUTEX --> UART[USART1 serial monitor]

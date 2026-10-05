@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BCA182 Laboratory Report - FreeRTOS Multisensor Room Monitor</title>
+<style>
+@page { size: A4; margin: 18mm 16mm 17mm; }
+:root { --ink: #1e293b; --muted: #64748b; --line: #cbd5e1; --blue: #dbeafe; --blue-dark: #1d4ed8; }
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); font: 10.5pt Georgia, "Times New Roman", serif; line-height: 1.45; }
+h1, h2, h3 { font-family: Arial, Helvetica, sans-serif; color: #0f172a; }
+h1 { font-size: 24pt; line-height: 1.1; margin: 0 0 10pt; }
+h2 { font-size: 15pt; border-bottom: 1px solid var(--line); padding-bottom: 4pt; margin: 20pt 0 8pt; }
+h3 { font-size: 11.5pt; margin: 14pt 0 5pt; }
+p { margin: 6pt 0; }
+.cover { min-height: 245mm; display: flex; flex-direction: column; justify-content: center; text-align: center; page-break-after: always; }
+.cover .rule { width: 72%; border-top: 3px solid var(--blue-dark); margin: 18pt auto; }
+.cover .course { color: var(--blue-dark); font: bold 11pt Arial, sans-serif; letter-spacing: 1.2px; text-transform: uppercase; }
+.cover .subtitle { font-size: 13pt; color: var(--muted); }
+.cover .meta { margin-top: 42pt; font-family: Arial, sans-serif; font-size: 10pt; }
+.callout { background: #f8fafc; border-left: 4px solid var(--blue-dark); padding: 8pt 10pt; margin: 10pt 0; }
+table { width: 100%; border-collapse: collapse; margin: 8pt 0 12pt; font-size: 9pt; page-break-inside: avoid; }
+th { background: var(--blue); color: #0f172a; font-family: Arial, sans-serif; font-weight: bold; }
+th, td { border: 1px solid var(--line); padding: 5pt 6pt; vertical-align: top; }
+pre { background: #f8fafc; border: 1px solid var(--line); padding: 8pt; font: 8.5pt Consolas, monospace; white-space: pre-wrap; }
+code { font-family: Consolas, monospace; font-size: 90%; }
+ul, ol { margin-top: 4pt; }
+.figure { border: 1px solid var(--line); background: #f8fafc; padding: 12pt; text-align: center; font-family: Arial, sans-serif; page-break-inside: avoid; }
+.figure .box { display: inline-block; border: 2px solid #93c5fd; background: #eff6ff; padding: 8pt 14pt; margin: 3pt; font-weight: bold; }
+.figure .arrow { color: var(--blue-dark); font-size: 16pt; }
+.small { color: var(--muted); font-size: 9pt; }
+.page-break { page-break-before: always; }
+footer { color: var(--muted); font: 8pt Arial, sans-serif; text-align: center; }
+</style>
+</head>
+<body>
+<section class="cover">
+  <div class="course">BCA182 Embedded Systems Programming</div>
+  <div class="rule"></div>
+  <h1>Laboratory Activity No. 1</h1>
+  <div class="subtitle">Real-Time Multisensor Room Monitoring System</div>
+  <p class="subtitle">FreeRTOS-Based STM32 Blue Pill Implementation</p>
+  <div class="meta">
+    <p><strong>Student:</strong> ______________________________</p>
+    <p><strong>Subject / Section:</strong> ______________________________</p>
+    <p><strong>Date:</strong> ______________________________</p>
+  </div>
+</section>
+
+<h2>1. Problem and Requirements</h2>
+<p>This project implements a FreeRTOS-based room-monitoring system for an STM32F103C8T6 Blue Pill. The system measures temperature, humidity, relative ambient light, and motion. It displays one selected measurement, accepts rotary encoder navigation, activates a buzzer outside the 18.0 C to 30.0 C normal range, and changes between ACTIVE and INACTIVE activity states.</p>
+<div class="callout"><strong>Simulation platform:</strong> PlatformIO with STM32Cube and native FreeRTOS APIs, simulated in Wokwi using a DHT22, photoresistor, PIR sensor, KY-040 rotary encoder, SSD1306 OLED, and buzzer.</div>
+
+<h2>2. System Architecture and Design</h2>
+<div class="figure"><div><span class="box">DHT22<br>PA1</span><span class="arrow"> -&gt; </span><span class="box">STM32F103C8T6<br>FreeRTOS</span><span class="arrow"> -&gt; </span><span class="box">SSD1306 OLED<br>PB6 / PB7</span></div><div><span class="box">LDR PA0</span><span class="arrow"> -&gt; </span><span class="box">PIR PB13<br>Encoder PB10/PB11</span><span class="arrow"> -&gt; </span><span class="box">Buzzer PA8 PWM<br>USART1 PA9</span></div><p class="small">Figure 1. Hardware and peripheral architecture.</p></div>
+<p>Hardware initialization is performed in <code>main()</code>. The application entry point <code>app_main()</code> creates the queues, event group, mutex, and six tasks before starting the scheduler. The OLED is owned by <code>DisplayTask</code>, while sensor acquisition, input, motion, alarm, and state management have separate task responsibilities.</p>
+
+<h2>3. FreeRTOS Architecture</h2>
+<table><tr><th>Task</th><th>Responsibility</th><th>Period / trigger</th><th>Priority</th><th>IPC</th><th>Blocked condition</th></tr>
+<tr><td>SensorTask</td><td>DHT22 and LDR measurements</td><td>2500 ms</td><td>2</td><td>Sensor queue</td><td>Periodic delay</td></tr>
+<tr><td>DisplayTask</td><td>OLED ownership and rendering</td><td>500 ms</td><td>1</td><td>Sensor/nav queues, event group</td><td>Periodic delay</td></tr>
+<tr><td>InputTask</td><td>Rotary encoder navigation</td><td>5 ms</td><td>3</td><td>Navigation queue</td><td>Periodic delay</td></tr>
+<tr><td>MotionTask</td><td>PIR monitoring</td><td>100 ms</td><td>3</td><td>Motion queue, event group</td><td>Periodic delay</td></tr>
+<tr><td>AlarmTask</td><td>Temperature alarm and TIM1 PWM</td><td>100 ms</td><td>2</td><td>Sensor queue, event group</td><td>Periodic delay</td></tr>
+<tr><td>StateTask</td><td>ACTIVE/INACTIVE management</td><td>100 ms</td><td>2</td><td>Motion queue, event group</td><td>Periodic delay</td></tr></table>
+<p><code>vTaskDelayUntil()</code> is used for periodic sensor and display execution. The queue objects carry sensor data, navigation commands, and the latest motion state. The serial mutex protects shared diagnostic output. <code>EVENT_ALARM_BIT2</code> is set by <code>AlarmTask</code> when temperature is outside the normal range and cleared when it returns to normal.</p>
+
+<h2>4. Implementation</h2>
+<p><code>SensorTask</code> validates DHT22 readings, copies the latest PIR state from <code>xMotionQueue</code>, and scales the ADC reading to a relative 0-100% light value. <code>DisplayTask</code> displays the selected measurement together with <code>STATE: ACTIVE/INACTIVE</code> and <code>ALARM: ACTIVE/NORMAL</code>.</p>
+<p><code>AlarmTask</code> evaluates the latest sample every 100 ms and controls a 1 kHz TIM1 PWM signal on PA8. Alarm thresholds, navigation, and state transitions are separated into testable logic functions.</p>
+
+<h2>5. Verification and Testing</h2>
+<h3>Automated tests</h3>
+<p>Command: <code>python -m platformio test -e native</code></p>
+<table><tr><th>Area</th><th>Coverage</th><th>Result</th></tr><tr><td>Alarm logic</td><td>Below, at, normal, at upper, and above upper limit</td><td>PASS</td></tr><tr><td>Display navigation</td><td>Forward, reverse, and wraparound</td><td>PASS</td></tr><tr><td>System state</td><td>Timeout, inactive persistence, and motion reactivation</td><td>PASS</td></tr></table>
+<p><strong>Recorded result on 2026-10-05:</strong> 13 of 13 native tests passed. The STM32 firmware build also succeeded.</p>
+<h3>Wokwi evidence</h3>
+<p>Record actual observations for FT-01 through FT-10 in <code>docs/test-plan.md</code>. Include screenshots of the circuit, normal display, alarm display, and ACTIVE/INACTIVE transitions before final submission.</p>
+
+<h2>6. Static Code Analysis</h2>
+<p>Command: <code>python -m platformio check</code></p>
+<p>The recorded result is 0 high, 0 medium, and 43 low-severity findings. Most low findings are per-file <code>unusedFunction</code> reports caused by cross-translation-unit calls, task entry points, and interrupt handlers. The complete interpretation is in <code>docs/static-analysis.md</code>.</p>
+
+<h2>7. Engineering Discussion</h2>
+<p>Latest-value queues are appropriate because consumers need the current sensor and motion state rather than a historical stream. The OLED has a single owning task to avoid competing I2C transactions. The event group provides shared activity, motion, and alarm status signals.</p>
+<p>The LDR value is relative rather than calibrated lux. Wokwi behavior may differ from physical hardware. The remaining verification work is to record the Wokwi functional tests, complete the deliberate FreeRTOS fault experiments, and capture final screenshots.</p>
+
+<h2>8. Conclusion</h2>
+<p>The project demonstrates a modular STM32 FreeRTOS architecture with six cooperating tasks, queues, an event group, a mutex, periodic scheduling, a state machine, hardware PWM, and host-based decision-logic tests. The design separates hardware access from deterministic logic and provides a foundation for further physical-hardware testing.</p>
+
+<h2>Requirements Traceability</h2>
+<table><tr><th>Requirement</th><th>Implementation</th><th>Verification</th></tr><tr><td>FR-01 / FR-02</td><td>SensorTask and DHT22 driver</td><td>FT-01 / FT-02</td></tr><tr><td>FR-03</td><td>SensorTask ADC scaling</td><td>FT-03</td></tr><tr><td>FR-04</td><td>MotionTask and PIR</td><td>FT-08 / FT-10</td></tr><tr><td>FR-05</td><td>DisplayTask and OLED driver</td><td>FT-01 through FT-03</td></tr><tr><td>FR-06</td><td>InputTask and navigation logic</td><td>Unit tests / FT-04 / FT-05</td></tr><tr><td>FR-07</td><td>AlarmTask and EVENT_ALARM_BIT2</td><td>Unit tests / FT-06 / FT-07</td></tr><tr><td>FR-08 / FR-09 / FR-10</td><td>StateTask and event group</td><td>Unit tests / FT-08 through FT-10</td></tr></table>
+
+<footer>BCA182 Embedded Systems Programming | FreeRTOS Multisensor Room Monitor</footer>
+</body>
+</html>

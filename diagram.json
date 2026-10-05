@@ -26,7 +26,7 @@
     [ "encoder1:VCC", "stm32:3V3.1", "red", ["h-20", "v80", "h-100"] ],
     [ "encoder1:GND", "stm32:GND.1", "black", ["h-20", "v140", "h-100"] ],
 
-    [ "buzzer1:1", "stm32:B12", "purple", ["h-80", "v-80", "h-100"] ],
+    [ "buzzer1:1", "stm32:A8", "purple", ["h-80", "v-80", "h-100"] ],
     [ "buzzer1:2", "stm32:GND.1", "black", ["h-100", "v-100", "h-100"] ],
 
     [ "pir1:VCC", "stm32:3V3.2", "red", ["h-40", "v-60", "h-100"] ],

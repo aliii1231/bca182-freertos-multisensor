@@ -1,0 +1,8 @@
+flowchart LR
+    DHT[DHT22] -->|PA1| MCU[STM32F103C8T6 Blue Pill]
+    LDR[LDR analog output] -->|PA0 / ADC1| MCU
+    PIR[PIR motion sensor] -->|PB13| MCU
+    ENC[KY-040 encoder] -->|PB10 PB11| MCU
+    MCU -->|I2C1 PB6 PB7| OLED[SSD1306 OLED]
+    MCU -->|PA8 / TIM1_CH1| BUZZER[Buzzer]
+    MCU -->|USART1 PA9| SERIAL[Wokwi Serial Monitor]

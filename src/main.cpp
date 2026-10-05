@@ -34,6 +34,7 @@
 UART_HandleTypeDef huart1;
 ADC_HandleTypeDef  hadc1;
 I2C_HandleTypeDef  hi2c1;
+TIM_HandleTypeDef  htim1;
 
 extern "C" uint32_t g_pfnVectors[];
 
@@ -309,7 +310,8 @@ void SensorTask(void *pvParameters)
             sd.temperature    = d.temperature;
             sd.humidity       = d.humidity;
             sd.lightLevel     = light_pct;
-            sd.motionDetected = false;          /* Part IX: MotionTask */
+            sd.motionDetected = false;
+            xQueuePeek(xMotionQueue, &sd.motionDetected, 0);
 
             xQueueOverwrite(xSensorQueue, &sd);
 
@@ -362,9 +364,15 @@ void DisplayTask(void *pvParameters)
         SensorData sd;
         if (xQueuePeek(xSensorQueue, &sd, 0) == pdTRUE) {
             oled_clear();
-            
+
             // Draw the top header
             oled_show_text(10, 0, "ROOM MONITOR");
+
+            EventBits_t events = xEventGroupGetBits(xSystemEventGroup);
+            oled_show_text(10, 1,
+                           (events & EVENT_ACTIVE_BIT0) != 0 ? "STATE: ACTIVE" : "STATE: INACTIVE");
+            oled_show_text(10, 2,
+                           (events & EVENT_ALARM_BIT2) != 0 ? "ALARM: ACTIVE" : "ALARM: NORMAL");
 
             // Prepare the string for the specific sensor
             if (mode == DISPLAY_TEMPERATURE) {
@@ -384,7 +392,7 @@ void DisplayTask(void *pvParameters)
             
             // Draw the formatted text cleanly underneath
             oled_show_text(10, 3, line);
-            
+
         } else {
             oled_clear();
             oled_show_text(10, 3, "NO DATA");
@@ -546,14 +554,33 @@ static void MX_ADC1_Init(void)
 
 static void MX_BUZZER_Init(void)
 {
-    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_TIM1_CLK_ENABLE();
 
     GPIO_InitTypeDef gpio = {0};
-    gpio.Pin = GPIO_PIN_12;
-    gpio.Mode = GPIO_MODE_OUTPUT_PP;
-    gpio.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOB, &gpio);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+    gpio.Pin = GPIO_PIN_8;
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOA, &gpio);
+
+    htim1.Instance = TIM1;
+    htim1.Init.Prescaler = 7;
+    htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim1.Init.Period = 999;
+    htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+    htim1.Init.RepetitionCounter = 0;
+    HAL_TIM_PWM_Init(&htim1);
+
+    TIM_OC_InitTypeDef channel = {0};
+    channel.OCMode = TIM_OCMODE_PWM1;
+    channel.Pulse = 0;
+    channel.OCPolarity = TIM_OCPOLARITY_HIGH;
+    channel.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+    channel.OCFastMode = TIM_OCFAST_DISABLE;
+    channel.OCIdleState = TIM_OCIDLESTATE_RESET;
+    channel.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+    HAL_TIM_PWM_ConfigChannel(&htim1, &channel, TIM_CHANNEL_1);
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
 }
 
 static void MX_PIR_Init(void)
