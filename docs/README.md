@@ -12,6 +12,7 @@ BCA182 FreeRTOS multisensor project.
 - [fault-experiments.md](fault-experiments.md): deliberate FreeRTOS fault experiments.
 - [static-analysis.md](static-analysis.md): PlatformIO cppcheck findings.
 - [laboratory-report.md](laboratory-report.md): structured laboratory report draft.
+- [laboratory-report.html](laboratory-report.html): print-ready formatted report for PDF export.
 
 The `.mmd` files can be rendered with Mermaid-compatible tooling. Screenshots
 and exported diagram images should be added here after final Wokwi verification.
