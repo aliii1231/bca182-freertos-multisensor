@@ -317,9 +317,10 @@ PASS/FAIL result:
 ### What is still missing
 
 The Wokwi screenshots above document a real run and show motion detection,
-`STATE: ACTIVE`, and `STATE: INACTIVE`. However, the complete functional test
-record is not finished yet. Each test must have an actual observation from the
-simulator before it can be marked **PASS**, as required by the laboratory
+`STATE: ACTIVE`, and `STATE: INACTIVE`. These observations have been recorded
+as PASS for FT-08, FT-09, and FT-10 in the test plan. The remaining functional
+test record is not finished yet. Each test must have an actual observation from
+the simulator before it can be marked **PASS**, as required by the laboratory
 instructions.
 
 The remaining observations to record in
@@ -327,16 +328,16 @@ The remaining observations to record in
 
 | Test | Actual observation still required |
 |---|---|
-| FT-01 | What happened when the DHT22 temperature was changed? |
-| FT-02 | What happened when the DHT22 humidity was changed? |
-| FT-03 | What happened when the LDR/light level was changed? |
-| FT-04 | What happened when the encoder was rotated clockwise? |
-| FT-05 | What happened when the encoder was rotated counterclockwise? |
-| FT-06 | What happened when the temperature was set above 30 C? |
-| FT-07 | What happened when the temperature returned to normal? |
-| FT-08 | What happened when the PIR detected motion? |
-| FT-09 | What happened after 15 seconds without motion? |
-| FT-10 | What happened when motion was triggered while inactive? |
+| FT-01 | Completed: changing the DHT22 produced repeated serial readings of `Temperature: 11.80 C`. |
+| FT-02 | Completed: changing the DHT22 produced repeated serial readings of `Humidity: 21.00 %`. |
+| FT-03 | Completed: changing the photoresistor produced `Light: 1 %` in the serial monitor. |
+| FT-04 | Completed: clockwise rotation selected the MOTION mode, shown by `[INPUT] mode: MOTION`. |
+| FT-05 | Completed: counterclockwise rotation selected the TEMPERATURE mode, shown by `[INPUT] mode: TEMPERATURE`. |
+| FT-06 | Completed: at 49.40 C, the OLED showed `ALARM: ACTIVE` and the buzzer indicator was visible, even while `STATE: INACTIVE`. |
+| FT-07 | Completed: returning the DHT22 temperature to 18.00 C cleared the alarm; the OLED showed `ALARM: NORMAL` and the serial monitor reported `Temperature: 18.00 C`. |
+| FT-08 | Completed: PIR motion produced `[MOTION] detected`, `[STATE] ACTIVE`, and subsequent samples with `Motion: yes`. Earlier `Motion: no` samples reflect the periodic sampling interval. |
+| FT-09 | Completed: after no motion, the system showed `STATE: INACTIVE`. |
+| FT-10 | Completed: motion while inactive returned the system to `STATE: ACTIVE`. |
 
 Do not mark a test as PASS based only on the expected behavior or on a unit
 test. Record the observed serial/OLED result and, where useful, add a

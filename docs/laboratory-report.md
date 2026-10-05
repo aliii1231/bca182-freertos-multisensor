@@ -64,9 +64,18 @@ priority, and mutex experiments are specified in
 [fault-experiments.md](fault-experiments.md); their observations remain to be
 recorded during the final Wokwi session.
 
-Wokwi functional tests FT-01 through FT-10 remain a recordable checklist. Each
-must include the actual observed behavior before it is marked PASS. The three
-required FreeRTOS fault experiments are also listed in the test plan.
+Wokwi functional tests FT-01 through FT-10 have now been observed and
+recorded as PASS. The DHT22 produced changed
+temperature and humidity readings, the photoresistor produced a changed light
+percentage, and at 49.40 C the alarm remained active even while the system was
+inactive. The PIR activated the system, inactivity produced `STATE: INACTIVE`,
+and motion while inactive returned the system to `STATE: ACTIVE`. During the
+PIR test, the event message appeared immediately and the following periodic
+samples reported `Motion: yes`; earlier `Motion: no` samples were caused by
+the sampling interval. Encoder rotation also selected MOTION clockwise and
+TEMPERATURE counterclockwise. Returning the temperature to 18.00 C cleared the
+alarm and produced `ALARM: NORMAL`. The three required FreeRTOS fault
+experiments are also listed in the test plan.
 
 ## 6. Static Code Analysis
 
@@ -84,8 +93,7 @@ to avoid competing I2C transactions. The event group provides shared state
 signals without copying sensor data between tasks.
 
 The main limitations are that the LDR value is relative rather than calibrated
-lux, Wokwi is not physical hardware, and final functional observations still
-need to be recorded from the simulator. The current design also keeps motion
+lux, Wokwi is not physical hardware. The current design also keeps motion
 separate from the `SensorData` sample and uses the event group for the
 centralized alarm level.
 
@@ -94,9 +102,8 @@ centralized alarm level.
 The project demonstrates a modular STM32 FreeRTOS architecture with six
 cooperating tasks, queues, an event group, a mutex, periodic scheduling, a
 state machine, and host-based decision-logic tests. The next verification step
-is to run the complete Wokwi test table, capture screenshots, perform the fault
-experiments, and export this report to `docs/laboratory-report.pdf` for final
-submission.
+is to perform the fault experiments and export this report to
+`docs/laboratory-report.pdf` for final submission.
 
 ## Requirements Traceability
 
