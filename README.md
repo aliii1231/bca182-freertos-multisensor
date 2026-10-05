@@ -314,6 +314,34 @@ PASS/FAIL result:
 | FT-09 | Wait 15 seconds without motion | System becomes `INACTIVE` |
 | FT-10 | Trigger PIR while inactive | System returns to `ACTIVE` |
 
+### What is still missing
+
+The Wokwi screenshots above document a real run and show motion detection,
+`STATE: ACTIVE`, and `STATE: INACTIVE`. However, the complete functional test
+record is not finished yet. Each test must have an actual observation from the
+simulator before it can be marked **PASS**, as required by the laboratory
+instructions.
+
+The remaining observations to record in
+[`docs/test-plan.md`](docs/test-plan.md) are:
+
+| Test | Actual observation still required |
+|---|---|
+| FT-01 | What happened when the DHT22 temperature was changed? |
+| FT-02 | What happened when the DHT22 humidity was changed? |
+| FT-03 | What happened when the LDR/light level was changed? |
+| FT-04 | What happened when the encoder was rotated clockwise? |
+| FT-05 | What happened when the encoder was rotated counterclockwise? |
+| FT-06 | What happened when the temperature was set above 30 C? |
+| FT-07 | What happened when the temperature returned to normal? |
+| FT-08 | What happened when the PIR detected motion? |
+| FT-09 | What happened after 15 seconds without motion? |
+| FT-10 | What happened when motion was triggered while inactive? |
+
+Do not mark a test as PASS based only on the expected behavior or on a unit
+test. Record the observed serial/OLED result and, where useful, add a
+corresponding screenshot.
+
 ## Engineering Decisions
 
 - **Native STM32Cube and FreeRTOS:** The laboratory requires STM32 HAL and
