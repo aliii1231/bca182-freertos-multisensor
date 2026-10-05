@@ -227,11 +227,33 @@ The firmware used by Wokwi is written to
 4. Use the DHT22, photoresistor, PIR, and encoder controls to exercise the system.
 5. Observe the OLED and the Wokwi serial monitor.
 
-Expected startup output includes:
+### Wokwi run evidence
+
+The following screenshots were captured from this project's Wokwi run:
+
+![Wokwi circuit and serial monitor](docs/screenshots/wokwi-run.png)
+
+The circuit ran with the Blue Pill, OLED, rotary encoder, PIR motion sensor,
+buzzer, DHT22, and photoresistor connected. The serial monitor reported:
 
 ```text
 BCA182 FreeRTOS Multisensor
 System starting...
+[INPUT] ready
+Sample: Temperature: 25.39 C, Humidity: 60.00 %, Light: 24 %, Motion: no
+[DISPLAY] ready
+[STATE] INACTIVE
+```
+
+When motion was triggered, the PIR and state transitions were observed:
+
+![Wokwi motion detection serial output](docs/screenshots/wokwi-motion-output.png)
+
+```text
+[MOTION] detected
+[STATE] ACTIVE
+Sample: Temperature: 25.39 C, Humidity: 60.00 %, Light: 24 %, Motion: yes
+Sample: Temperature: 25.39 C, Humidity: 60.00 %, Light: 24 %, Motion: no
 ```
 
 Change the DHT22 temperature below 18.0 C or above 30.0 C to exercise the
@@ -312,14 +334,11 @@ PASS/FAIL result:
 
 - The light value is relative rather than a calibrated lux measurement.
 - Wokwi simulation behavior may differ from physical STM32 timing and sensor noise.
-- Wokwi functional-test observations and screenshots still need to be recorded
-	from the final build.
 
 ## Future Improvements
 
 - Export the laboratory-report draft to `docs/laboratory-report.pdf` after the
-	remaining Wokwi evidence is complete.
-- Render the Mermaid diagrams and add final Wokwi circuit and OLED screenshots.
+	report is finalized.
 - Add encoder switch handling if the hardware configuration includes the KY-040
 	push button.
 - Record the observations from the fault experiments in
